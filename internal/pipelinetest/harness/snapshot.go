@@ -42,6 +42,9 @@ type SnapshotTotals struct {
 
 // LogEntry is one captured Loki entry.
 type LogEntry struct {
+	// Sink is the exit component whose sink captured the entry. It is empty
+	// for the default sink.
+	Sink               string            `json:"sink,omitempty"`
 	Labels             map[string]string `json:"labels"`
 	Line               string            `json:"line"`
 	Timestamp          time.Time         `json:"timestamp"`
@@ -50,6 +53,7 @@ type LogEntry struct {
 
 // Sample is one captured Prometheus sample.
 type Sample struct {
+	Sink   string            `json:"sink,omitempty"`
 	Labels map[string]string `json:"labels"`
 	Value  *float64          `json:"value,omitempty"`
 	// ValueText holds values JSON cannot encode: NaN, such as a staleness
@@ -64,6 +68,7 @@ type Sample struct {
 
 // SpanInfo is one captured span.
 type SpanInfo struct {
+	Sink               string            `json:"sink,omitempty"`
 	Name               string            `json:"name"`
 	Kind               string            `json:"kind"`
 	Status             string            `json:"status"`
@@ -82,28 +87,29 @@ func (s Snapshot) Text(limit int) string {
 	if s.Totals.Logs > 0 {
 		sections = append(sections, renderCapped("logs", s.Totals.Logs, len(s.Logs), limit, func(i int) string {
 			e := s.Logs[i]
-			return fmt.Sprintf("%s %q", renderStringMap(e.Labels), e.Line)
+			return fmt.Sprintf("%s%s %q", sinkPrefix(e.Sink), renderStringMap(e.Labels), e.Line)
 		}))
 	}
 	if s.Totals.Metrics > 0 {
 		sections = append(sections, renderCapped("metrics", s.Totals.Metrics, len(s.Metrics), limit, func(i int) string {
 			m := s.Metrics[i]
-			if m.Histogram {
-				return renderStringMap(m.Labels) + " histogram"
+			series := sinkPrefix(m.Sink) + renderStringMap(m.Labels)
+			switch {
+			case m.Histogram:
+				return series + " histogram"
+			case m.Value != nil:
+				return series + " " + fmt.Sprint(*m.Value)
+			case m.ValueText != "":
+				return series + " " + m.ValueText
+			default:
+				return series
 			}
-			if m.Value != nil {
-				return renderStringMap(m.Labels) + " " + fmt.Sprint(*m.Value)
-			}
-			if m.ValueText != "" {
-				return renderStringMap(m.Labels) + " " + m.ValueText
-			}
-			return renderStringMap(m.Labels)
 		}))
 	}
 	if s.Totals.Spans > 0 {
 		sections = append(sections, renderCapped("spans", s.Totals.Spans, len(s.Spans), limit, func(i int) string {
 			sp := s.Spans[i]
-			line := fmt.Sprintf("%q kind=%s status=%s", sp.Name, sp.Kind, sp.Status)
+			line := fmt.Sprintf("%s%q kind=%s status=%s", sinkPrefix(sp.Sink), sp.Name, sp.Kind, sp.Status)
 			if len(sp.Attributes) > 0 {
 				line += " attributes=" + renderStringMap(sp.Attributes)
 			}
@@ -159,6 +165,21 @@ func renderCapped(name string, total, kept, limit int, line func(i int) string) 
 	return b.String()
 }
 
+func nameAt(names []string, i int) string {
+	if i < len(names) {
+		return names[i]
+	}
+	return ""
+}
+
+// sinkPrefix shows which sink captured an item, when it is not the default.
+func sinkPrefix(name string) string {
+	if name == "" {
+		return ""
+	}
+	return "[" + name + "] "
+}
+
 func exportSnapshot(s snapshot) Snapshot {
 	out := Snapshot{
 		Logs:    make([]LogEntry, 0, min(len(s.loki), snapshotLimit)),
@@ -173,7 +194,7 @@ func exportSnapshot(s snapshot) Snapshot {
 		},
 	}
 
-	for _, e := range s.loki[:min(len(s.loki), snapshotLimit)] {
+	for i, e := range s.loki[:min(len(s.loki), snapshotLimit)] {
 		labels := make(map[string]string, len(e.Labels))
 		for k, v := range e.Labels {
 			labels[string(k)] = string(v)
@@ -186,6 +207,7 @@ func exportSnapshot(s snapshot) Snapshot {
 			}
 		}
 		out.Logs = append(out.Logs, LogEntry{
+			Sink:               nameAt(s.lokiSinks, i),
 			Labels:             labels,
 			Line:               e.Line,
 			Timestamp:          e.Timestamp.UTC(),
@@ -193,8 +215,9 @@ func exportSnapshot(s snapshot) Snapshot {
 		})
 	}
 
-	for _, p := range s.prometheus[:min(len(s.prometheus), snapshotLimit)] {
+	for i, p := range s.prometheus[:min(len(s.prometheus), snapshotLimit)] {
 		sample := Sample{
+			Sink:      nameAt(s.promSinks, i),
 			Labels:    p.Labels.Map(),
 			Histogram: p.Histogram != nil,
 			Timestamp: p.Timestamp,
@@ -225,8 +248,9 @@ func exportSnapshot(s snapshot) Snapshot {
 		out.Targets[ref] = ts.targets[:min(len(ts.targets), snapshotLimit)]
 	}
 
-	for _, sp := range s.spans[:min(len(s.spans), snapshotLimit)] {
+	for i, sp := range s.spans[:min(len(s.spans), snapshotLimit)] {
 		out.Spans = append(out.Spans, SpanInfo{
+			Sink:               nameAt(s.spanSinks, i),
 			Name:               sp.Name,
 			Kind:               sp.Kind,
 			Status:             sp.StatusCode,

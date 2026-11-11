@@ -46,6 +46,10 @@ type SpanSchema struct {
 
 // TraceAssertionSchema describes one declarative traces assertion.
 type TraceAssertionSchema struct {
+	// Sink, when set, checks only what the sink replacing this exit
+	// component captured, such as loki.write.audit. It must be one of
+	// config.sinks.
+	Sink  string           `yaml:"sink,omitempty"`
 	Name  string           `yaml:"name,omitempty"`
 	Type  string           `yaml:"type,omitempty"`
 	Count *int             `yaml:"count,omitempty"`

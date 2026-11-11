@@ -32,14 +32,14 @@ type sinkTarget struct {
 // sinkTargetFor returns how to replace the component with the given name, such
 // as loki.write, with the test sink. Only components whose single exported
 // receiver can be swapped for one of the sink's are supported.
-func sinkTargetFor(name string) (sinkTarget, error) {
+func sinkTargetFor(name, sinkID string) (sinkTarget, error) {
 	switch {
 	case name == "loki.write":
-		return sinkTarget{field: "receiver", replacement: "pipelinetest.sink.out.loki_receiver"}, nil
+		return sinkTarget{field: "receiver", replacement: sinkID + ".loki_receiver"}, nil
 	case name == "prometheus.remote_write":
-		return sinkTarget{field: "receiver", replacement: "pipelinetest.sink.out.prometheus_receiver"}, nil
+		return sinkTarget{field: "receiver", replacement: sinkID + ".prometheus_receiver"}, nil
 	case strings.HasPrefix(name, "otelcol.exporter."):
-		return sinkTarget{field: "input", replacement: "pipelinetest.sink.out.otel_input"}, nil
+		return sinkTarget{field: "input", replacement: sinkID + ".otel_input"}, nil
 	case name == "pyroscope.write":
 		return sinkTarget{}, errors.New("profiles are not supported by pipeline tests yet")
 	default:
@@ -64,7 +64,27 @@ type transformedConfig struct {
 	// sinkRefs maps a full reference, such as loki.write.default.receiver, to
 	// the sink export replacing it.
 	sinkRefs map[string]string
+	// sinks lists the sink generated for each replaced exit component.
+	sinks []generatedSink
 }
+
+// generatedSink is the pipelinetest.sink that replaces one exit component.
+type generatedSink struct {
+	// exit is the ID of the replaced component, such as loki.write.default.
+	exit string
+	// label is the sink's block label.
+	label string
+	// externalLabels is the source text of the exit's external_labels, or
+	// empty when it sets none.
+	externalLabels string
+}
+
+// componentID is the sink's component ID.
+func (g generatedSink) componentID() string { return "pipelinetest.sink." + g.label }
+
+// sinkLabel names the sink replacing an exit, such as loki_write_default for
+// loki.write.default.
+func sinkLabel(exit string) string { return strings.ReplaceAll(exit, ".", "_") }
 
 // sourceReplacement asks for an entry component to be replaced by a test
 // input of the given signal.
@@ -144,12 +164,17 @@ func transformConfig(name, src string, spec transformSpec) (transformedConfig, e
 		if err != nil {
 			return out, err
 		}
-		target, err := sinkTargetFor(block.GetBlockName())
+		gen := generatedSink{exit: id, label: sinkLabel(id)}
+		target, err := sinkTargetFor(block.GetBlockName(), gen.componentID())
 		if err != nil {
 			return out, fmt.Errorf("sink %s: %w", id, err)
 		}
 		sinkParts[id] = target
 		out.sinkRefs[id+"."+target.field] = target.replacement
+		if attr := findAttribute(block.Body, "external_labels"); attr != nil {
+			gen.externalLabels = src[ast.StartPos(attr.Value).Offset() : ast.EndPos(attr.Value).Offset()+1]
+		}
+		out.sinks = append(out.sinks, gen)
 	}
 
 	for _, id := range slices.Sorted(maps.Keys(discovery)) {

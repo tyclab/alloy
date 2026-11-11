@@ -38,6 +38,10 @@ type LokiEntrySchema struct {
 // assertions require Count and may optionally include match fields. Contains
 // assertions require at least one match field.
 type LokiAssertionSchema struct {
+	// Sink, when set, checks only what the sink replacing this exit
+	// component captured, such as loki.write.audit. It must be one of
+	// config.sinks.
+	Sink string `yaml:"sink,omitempty"`
 	// Name optionally describes the assertion in reports.
 	Name string `yaml:"name,omitempty"`
 	// Type is count or contains. When unset, it is count if Count is set and

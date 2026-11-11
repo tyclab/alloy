@@ -15,7 +15,10 @@ import (
 //
 // Everything generated goes after the config, so line numbers in errors about
 // the config still point at the user's file.
-func buildSource(schema TestSchema) (string, error) {
+//
+// It also returns the sinks that replace exit components, keyed by exit ID,
+// with their component IDs.
+func buildSource(schema TestSchema) (string, map[string]string, error) {
 	inputs := collectInputs(schema.Inputs)
 
 	var replacements []sourceReplacement
@@ -27,12 +30,12 @@ func buildSource(schema TestSchema) (string, error) {
 
 	discovery, err := targetLiterals(schema.Inputs.Targets)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	overrides, err := overrideExprs(schema.Config.Override)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	transformed, err := transformConfig(configName(schema.Config), schema.Config.Source, transformSpec{
@@ -43,15 +46,21 @@ func buildSource(schema TestSchema) (string, error) {
 		overrides: overrides,
 	})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	generated, err := buildSources(inputs, transformed, schema.Mocks)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
-	return rewritePipelineTestRefs(transformed.source) + "\n\n" + buildSink() + "\n\n" + generated, nil
+	sinks := make(map[string]string, len(transformed.sinks))
+	for _, s := range transformed.sinks {
+		sinks[s.exit] = s.componentID()
+	}
+
+	source := rewritePipelineTestRefs(transformed.source) + "\n\n" + buildSinks(transformed.sinks) + "\n\n" + generated
+	return source, sinks, nil
 }
 
 func configName(cfg ConfigSchema) string {
@@ -72,8 +81,19 @@ func rewritePipelineTestRefs(source string) string {
 	return replacer.Replace(source)
 }
 
-func buildSink() string {
-	return `pipelinetest.sink "out" {}`
+// buildSinks writes the default sink, which inline configs send to, and one
+// sink per replaced exit component, carrying its external_labels.
+func buildSinks(sinks []generatedSink) string {
+	var b strings.Builder
+	b.WriteString(`pipelinetest.sink "out" {}`)
+	for _, s := range sinks {
+		fmt.Fprintf(&b, "\n\npipelinetest.sink %q {", s.label)
+		if s.externalLabels != "" {
+			fmt.Fprintf(&b, "\n\texternal_labels = %s\n", s.externalLabels)
+		}
+		b.WriteString("}")
+	}
+	return b.String()
 }
 
 // testInput is one input of any signal that needs a generated source.

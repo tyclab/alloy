@@ -77,6 +77,10 @@ loki.write "cloud" {
   endpoint {
     url = "https://logs.example.com/loki/api/v1/push"
   }
+
+  external_labels = {
+    cluster = sys.env("CLUSTER_NAME"),
+  }
 }
 
 // Traces: tag spans with the environment, drop health checks, and batch.

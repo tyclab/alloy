@@ -25,11 +25,14 @@ const (
 
 // TestSchema describes a declarative pipeline test loaded from a text file.
 type TestSchema struct {
-	Flags  FlagsSchema     `yaml:"flags,omitempty"`
-	Config ConfigSchema    `yaml:"config"`
-	Inputs InputSchema     `yaml:"inputs"`
-	Mocks  MockSchema      `yaml:"mocks"`
-	Assert AssertionSchema `yaml:"assert"`
+	Flags FlagsSchema `yaml:"flags,omitempty"`
+	// Env sets environment variables while the test runs, for configs that
+	// read them with sys.env.
+	Env    map[string]string `yaml:"env,omitempty"`
+	Config ConfigSchema      `yaml:"config"`
+	Inputs InputSchema       `yaml:"inputs"`
+	Mocks  MockSchema        `yaml:"mocks"`
+	Assert AssertionSchema   `yaml:"assert"`
 }
 
 // FlagsSchema holds the Alloy run flags enabled for a pipeline test.
@@ -220,7 +223,7 @@ func produceInputs(ctx context.Context, alloy *harness.Alloy, inputs InputSchema
 
 // buildChecks builds every assertion with a name for reports, such as
 // "loki[0] contains".
-func buildChecks(assertions AssertionSchema) ([]harness.Check, error) {
+func buildChecks(assertions AssertionSchema, sinks []string) ([]harness.Check, error) {
 	var checks []harness.Check
 
 	lokiAssertions, err := buildLokiAssertions(assertions.Loki)
@@ -253,6 +256,28 @@ func buildChecks(assertions AssertionSchema) ([]harness.Check, error) {
 	}
 	for i, a := range targetAssertions {
 		checks = append(checks, harness.Check{Name: checkName("targets", i, assertions.Targets[i].Type, assertions.Targets[i].Count, assertions.Targets[i].Name, assertions.Targets[i].describe()), Assertion: a})
+	}
+
+	// Assertions that name a sink check only what it captured.
+	sinkOf := make([]string, 0, len(checks))
+	for _, a := range assertions.Loki {
+		sinkOf = append(sinkOf, a.Sink)
+	}
+	for _, a := range assertions.Prometheus {
+		sinkOf = append(sinkOf, a.Sink)
+	}
+	for _, a := range assertions.Traces {
+		sinkOf = append(sinkOf, a.Sink)
+	}
+	for i, sink := range sinkOf {
+		if sink == "" {
+			continue
+		}
+		if !slices.Contains(sinks, sink) {
+			return nil, fmt.Errorf("%s: sink %s is not one of config.sinks", checks[i].Name, sink)
+		}
+		checks[i].Name += " (sink " + sink + ")"
+		checks[i].Assertion = harness.ForSink(sink, checks[i].Assertion)
 	}
 
 	return checks, nil

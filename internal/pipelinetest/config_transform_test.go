@@ -21,6 +21,7 @@ loki.write "cloud" {
   endpoint {
     url = "https://example.com"
   }
+  external_labels = {cluster = sys.env("CLUSTER")}
 }
 
 discovery.kubernetes "pods" {
@@ -36,11 +37,12 @@ func TestTransformConfig(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, "[loki.process.app.receiver, pipelinetest.sink.out.loki_receiver]", out.sources["loki.source.file.app"].forwardTo)
-	require.Equal(t, map[string]string{"loki.write.cloud.receiver": "pipelinetest.sink.out.loki_receiver"}, out.sinkRefs)
+	require.Equal(t, "[loki.process.app.receiver, pipelinetest.sink.loki_write_cloud.loki_receiver]", out.sources["loki.source.file.app"].forwardTo)
+	require.Equal(t, map[string]string{"loki.write.cloud.receiver": "pipelinetest.sink.loki_write_cloud.loki_receiver"}, out.sinkRefs)
+	require.Equal(t, []generatedSink{{exit: "loki.write.cloud", label: "loki_write_cloud", externalLabels: `{cluster = sys.env("CLUSTER")}`}}, out.sinks)
 
 	require.Contains(t, out.source, "// comment kept")
-	require.Contains(t, out.source, "forward_to = [pipelinetest.sink.out.loki_receiver]")
+	require.Contains(t, out.source, "forward_to = [pipelinetest.sink.loki_write_cloud.loki_receiver]")
 	require.NotContains(t, out.source, "loki.source.file")
 	require.NotContains(t, out.source, "loki.write")
 	require.NotContains(t, out.source, "discovery.kubernetes")

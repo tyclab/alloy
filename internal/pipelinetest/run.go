@@ -85,7 +85,7 @@ func Run(ctx context.Context, schema TestSchema, cfg TestConfig) (Result, error)
 		return Result{}, err
 	}
 
-	checks, err := buildChecks(schema.Assert)
+	checks, err := buildChecks(schema.Assert, schema.Config.Sinks)
 	if err != nil {
 		return Result{}, err
 	}
@@ -93,13 +93,17 @@ func Run(ctx context.Context, schema TestSchema, cfg TestConfig) (Result, error)
 		return Result{}, errors.New("the test has no assertions")
 	}
 
-	source, err := buildSource(schema)
+	source, sinks, err := buildSource(schema)
 	if err != nil {
 		return Result{}, err
 	}
 
+	restoreEnv := setEnv(schema.Env)
+	defer restoreEnv()
+
 	alloy, err := harness.NewAlloy(harness.Config{
 		SinkID:         "pipelinetest.sink.out",
+		Sinks:          sinks,
 		DataPath:       cfg.DataPath,
 		Source:         source,
 		SourceName:     configName(schema.Config),
@@ -123,6 +127,31 @@ func Run(ctx context.Context, schema TestSchema, cfg TestConfig) (Result, error)
 		Snapshot:  snapshot,
 		Unhealthy: alloy.UnhealthyComponents(),
 	}, nil
+}
+
+// setEnv sets the test's environment variables, so sys.env in the config
+// reads them, and returns a function that restores the previous values. Tests
+// run one at a time, so changing the process environment is safe.
+func setEnv(env map[string]string) func() {
+	type prev struct {
+		value string
+		set   bool
+	}
+	saved := make(map[string]prev, len(env))
+	for k, v := range env {
+		old, ok := os.LookupEnv(k)
+		saved[k] = prev{value: old, set: ok}
+		_ = os.Setenv(k, v)
+	}
+	return func() {
+		for k, p := range saved {
+			if p.set {
+				_ = os.Setenv(k, p.value)
+			} else {
+				_ = os.Unsetenv(k)
+			}
+		}
+	}
 }
 
 // RunTest runs one test and returns an error describing every failed

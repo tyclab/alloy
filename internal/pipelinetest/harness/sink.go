@@ -12,6 +12,7 @@ import (
 	"github.com/grafana/loki/pkg/push"
 	remoteapi "github.com/prometheus/client_golang/exp/api/remote"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/metadata"
@@ -46,7 +47,13 @@ func registerSink() {
 	})
 }
 
-type SinkArguments struct{}
+type SinkArguments struct {
+	// ExternalLabels are added to every captured log entry and sample that
+	// does not already have the label, as loki.write and
+	// prometheus.remote_write do. A sink that replaces an exit component gets
+	// that component's external_labels.
+	ExternalLabels map[string]string `alloy:"external_labels,attr,optional"`
+}
 
 type SinkExports struct {
 	LokiPushUrl              string               `alloy:"loki_push_url,attr"`
@@ -219,7 +226,9 @@ func (s *Sink) Run(ctx context.Context) error {
 }
 
 func (s *Sink) Update(args component.Arguments) error {
+	s.mux.Lock()
 	s.args = args.(SinkArguments)
+	s.mux.Unlock()
 	return nil
 }
 
@@ -266,14 +275,26 @@ type snapshot struct {
 	// such as discovery.relabel.pods.output. The Alloy fills it in, not the
 	// sink.
 	targets map[string]targetsSnapshot
+
+	// bySink holds what each sink captured, keyed by the name the test uses
+	// for it: the exit component it replaces, or "" for the default sink. The
+	// fields above hold the union of all of them.
+	bySink map[string]snapshot
+	// lokiSinks, promSinks and spanSinks name the sink of each item of the
+	// union, by index.
+	lokiSinks, promSinks, spanSinks []string
 }
 
 func (s *Sink) snapshot() snapshot {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 
-	entries := make([]loki.Entry, len(s.lokiEntries))
-	copy(entries, s.lokiEntries)
+	external := s.args.ExternalLabels
+
+	entries := make([]loki.Entry, 0, len(s.lokiEntries))
+	for _, e := range s.lokiEntries {
+		entries = append(entries, withExternalLokiLabels(e, external))
+	}
 
 	samples := make([]PrometheusSample, 0, len(s.promSamples))
 	for _, sample := range s.promSamples {
@@ -283,7 +304,7 @@ func (s *Sink) snapshot() snapshot {
 		}
 
 		samples = append(samples, PrometheusSample{
-			Labels:    sample.Labels,
+			Labels:    withExternalPromLabels(sample.Labels, external),
 			Timestamp: sample.Timestamp,
 			Value:     sample.Value,
 			Histogram: sample.Histogram,
@@ -301,6 +322,38 @@ func (s *Sink) snapshot() snapshot {
 		otlpDataPoints: s.otlpDataPoints,
 		otlpLogRecords: s.otlpLogRecords,
 	}
+}
+
+// withExternalLokiLabels adds external labels an entry does not have. The
+// entry's own labels win, as they do in loki.write.
+func withExternalLokiLabels(e loki.Entry, external map[string]string) loki.Entry {
+	if len(external) == 0 {
+		return e
+	}
+	merged := make(model.LabelSet, len(e.Labels)+len(external))
+	for k, v := range external {
+		merged[model.LabelName(k)] = model.LabelValue(v)
+	}
+	for k, v := range e.Labels {
+		merged[k] = v
+	}
+	e.Labels = merged
+	return e
+}
+
+// withExternalPromLabels adds external labels a series does not have. The
+// series' own labels win, as they do in prometheus.remote_write.
+func withExternalPromLabels(ls labels.Labels, external map[string]string) labels.Labels {
+	if len(external) == 0 {
+		return ls
+	}
+	b := labels.NewBuilder(ls)
+	for k, v := range external {
+		if !ls.Has(k) {
+			b.Set(k, v)
+		}
+	}
+	return b.Labels()
 }
 
 // timestampToTime converts a Prometheus millisecond timestamp to a time.Time.

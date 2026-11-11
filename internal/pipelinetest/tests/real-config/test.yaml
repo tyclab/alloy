@@ -1,6 +1,9 @@
 # Tests config.alloy as it would run in production. The entry components are
 # replaced by inputs, the exit components by the sink, and the Kubernetes
 # discovery the test cannot run is removed.
+env:
+  CLUSTER_NAME: prod-eu
+
 config:
   path: config.alloy
   sinks:
@@ -50,9 +53,10 @@ assert:
       match:
         selector: '{__name__=~"debug_.*"}'
   loki:
-    - name: the level becomes a label
+    - name: the level becomes a label, and the writer adds the cluster
+      sink: loki.write.cloud
       match:
-        selector: '{service_name="app", level="info"}'
+        selector: '{service_name="app", level="info", cluster="prod-eu"}'
         line: 'level=info msg="request served"'
     - name: debug lines are dropped
       count: 0

@@ -1,11 +1,24 @@
 package harness
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
 
 type Assertion func(s snapshot) error
+
+// ForSink returns an Assertion that checks only what the named sink captured.
+func ForSink(name string, a Assertion) Assertion {
+	return func(s snapshot) error {
+		sub, ok := s.bySink[name]
+		if !ok {
+			return AssertionError{Kind: "sink", Message: fmt.Sprintf("no sink named %s", name)}
+		}
+		sub.targets = s.targets
+		return a(sub)
+	}
+}
 
 type AssertionError struct {
 	Kind    string

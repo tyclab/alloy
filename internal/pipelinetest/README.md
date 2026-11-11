@@ -81,11 +81,19 @@ assert:
 
 What the test does not cover:
 
-- The swapped components themselves. `external_labels` and relabel rules on
-  an exit go with it, and a replaced `prometheus.scrape` no longer adds `job`
-  and `instance`, so set them on the samples if the pipeline uses them.
-- Which exit received the data. All exits share one sink.
+- The swapped components themselves. Each exit's sink applies its
+  `external_labels`, and nothing else: write relabel rules, batching, auth
+  and the wire protocol are not tested. A replaced `prometheus.scrape` no
+  longer adds `job` and `instance`, so set them on the samples if the
+  pipeline uses them.
 - Components inside modules. Only top-level ones can be swapped.
+
+Each exit gets its own sink. Add `sink: <exit>` to an assertion to check only
+what that exit received, for example that audit logs go to the audit writer
+and never to the main one. Without `sink`, an assertion checks every sink.
+
+If the config reads environment variables with `sys.env`, set them under
+`env`, such as `env: {CLUSTER_NAME: prod-eu}`.
 
 Paths inside the config, such as `import.file` filenames, are relative to the
 directory `alloy test` runs in, as for `alloy run`.
@@ -106,6 +114,7 @@ A test file has five sections. Only `config` and `assert` are required.
 
 ```yaml
 flags: {}        # Alloy run flags, such as feature.loki.pipeline-v2.enabled: true
+env: {}          # environment variables the config reads with sys.env
 config: ...      # the Alloy configuration under test
 mocks: {}        # stub upstreams the config can call
 inputs: {}       # data to send into the pipeline
@@ -196,7 +205,8 @@ assertion is one of two types:
   everything of that signal.
 
 `type` can be left out: an assertion with `count` is a count assertion, and
-any other is `contains`. `name` is optional and shows in reports.
+any other is `contains`. `name` is optional and shows in reports. `sink`
+limits an assertion to one exit's sink.
 
 Assertions are retried until they all pass at once, or the timeout expires.
 So `count: 0` can pass before the data it rules out arrives. Pair it with a

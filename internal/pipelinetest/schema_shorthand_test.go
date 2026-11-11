@@ -61,7 +61,7 @@ prometheus:
     match: {selector: 'up{job!="ignored"}'}
 `), &schema))
 
-	checks, err := buildChecks(schema)
+	checks, err := buildChecks(schema, nil)
 	require.NoError(t, err)
 	require.Len(t, checks, 2)
 	require.Equal(t, `loki[0] contains: {service_name="api", level=~"warn|error"}`, checks[0].Name)
@@ -71,7 +71,7 @@ prometheus:
 func TestSelectorRejectsInvalidSyntax(t *testing.T) {
 	_, err := buildChecks(AssertionSchema{
 		Prometheus: []PrometheusAssertionSchema{{Match: PrometheusMatchSchema{Selector: "up{job="}}},
-	})
+	}, nil)
 	require.ErrorContains(t, err, `parse selector "up{job="`)
 }
 
@@ -91,4 +91,11 @@ func TestTargetLiteralsKeepValuesAndLines(t *testing.T) {
 	lit := out["discovery.kubernetes.pods"]
 	require.NotContains(t, lit, "\n")
 	require.Contains(t, lit, `"two  spaces\nand a newline"`)
+}
+
+func TestAssertionSinkMustBeConfigured(t *testing.T) {
+	_, err := buildChecks(AssertionSchema{
+		Loki: []LokiAssertionSchema{{Sink: "loki.write.audit", Count: new(int)}},
+	}, []string{"loki.write.default"})
+	require.ErrorContains(t, err, "sink loki.write.audit is not one of config.sinks")
 }

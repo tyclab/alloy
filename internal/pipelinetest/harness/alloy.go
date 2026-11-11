@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -25,7 +27,11 @@ const (
 )
 
 type Config struct {
+	// SinkID is the default sink, which inline configs send to.
 	SinkID string
+	// Sinks maps the name a test uses for a sink, such as the exit component
+	// it replaces, to the sink's component ID.
+	Sinks  map[string]string
 	Source string
 	// SourceName is the file name used in parse and evaluation errors.
 	SourceName     string
@@ -119,7 +125,10 @@ func NewAlloy(cfg Config) (*Alloy, error) {
 		return nil, fmt.Errorf("timed out waiting for runtime to finish loading: %w", err)
 	}
 
-	a.sink = MustComponent[*Sink](a, cfg.SinkID)
+	a.sinks = []namedSink{{name: "", sink: MustComponent[*Sink](a, cfg.SinkID)}}
+	for _, name := range slices.Sorted(maps.Keys(cfg.Sinks)) {
+		a.sinks = append(a.sinks, namedSink{name: name, sink: MustComponent[*Sink](a, cfg.Sinks[name])})
+	}
 	return a, nil
 }
 
@@ -130,6 +139,11 @@ type Alloy struct {
 	assertTimeout time.Duration
 	targetRefs    []string
 
+	sinks []namedSink
+}
+
+type namedSink struct {
+	name string
 	sink *Sink
 }
 
@@ -143,7 +157,7 @@ func (a *Alloy) Stop() {
 // returns the latest snapshot alongside the assertion failures.
 func (a *Alloy) Assert(assertions ...Assertion) error {
 	return eventually(func() error {
-		s := a.sink.snapshot()
+		s := a.snapshot()
 
 		errs := make([]error, 0, len(assertions))
 		for _, assertion := range assertions {
@@ -208,7 +222,19 @@ func (a *Alloy) ObserveTargets(refs ...string) {
 }
 
 func (a *Alloy) snapshot() snapshot {
-	s := a.sink.snapshot()
+	s := snapshot{bySink: make(map[string]snapshot, len(a.sinks))}
+	for _, ns := range a.sinks {
+		sub := ns.sink.snapshot()
+		s.bySink[ns.name] = sub
+		s.loki = append(s.loki, sub.loki...)
+		s.prometheus = append(s.prometheus, sub.prometheus...)
+		s.spans = append(s.spans, sub.spans...)
+		s.lokiSinks = appendName(s.lokiSinks, ns.name, len(sub.loki))
+		s.promSinks = appendName(s.promSinks, ns.name, len(sub.prometheus))
+		s.spanSinks = appendName(s.spanSinks, ns.name, len(sub.spans))
+		s.otlpDataPoints += sub.otlpDataPoints
+		s.otlpLogRecords += sub.otlpLogRecords
+	}
 	if len(a.targetRefs) > 0 {
 		s.targets = make(map[string]targetsSnapshot, len(a.targetRefs))
 		for _, ref := range a.targetRefs {
@@ -217,6 +243,13 @@ func (a *Alloy) snapshot() snapshot {
 		}
 	}
 	return s
+}
+
+func appendName(names []string, name string, n int) []string {
+	for range n {
+		names = append(names, name)
+	}
+	return names
 }
 
 // UnhealthyComponents lists the components that do not report healthy, with

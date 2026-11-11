@@ -96,24 +96,37 @@ Supporting modules means searching `declare` bodies and resolving
 
 ### Exit components
 
-| Component                 | Reference rewritten      | Sink export                         |
-| ------------------------- | ------------------------ | ----------------------------------- |
-| `loki.write`              | `<id>.receiver`          | `pipelinetest.sink.out.loki_receiver` |
-| `prometheus.remote_write` | `<id>.receiver`          | `pipelinetest.sink.out.prometheus_receiver` |
-| `otelcol.exporter.*`      | `<id>.input`             | `pipelinetest.sink.out.otel_input`  |
+| Component                 | Reference rewritten | Sink export                            |
+| ------------------------- | ------------------- | -------------------------------------- |
+| `loki.write`              | `<id>.receiver`     | `pipelinetest.sink.<id>.loki_receiver` |
+| `prometheus.remote_write` | `<id>.receiver`     | `pipelinetest.sink.<id>.prometheus_receiver` |
+| `otelcol.exporter.*`      | `<id>.input`        | `pipelinetest.sink.<id>.otel_input`    |
+
+`<id>` is the exit's ID with dots replaced by underscores, such as
+`loki_write_default`.
 
 Any other component is rejected with the list above. A reference to another
 export of a sink component, such as an exporter's `.something`, is an error,
 not a silent miss.
 
-**Consequence:** whatever the exit component does itself is not tested:
-`external_labels`, `write_relabel_config`, and the wire protocol.
+Each exit gets its own sink, so an assertion with `sink: <exit>` checks
+routing, such as audit logs reaching the audit writer and never the main one.
+Without `sink`, an assertion checks every sink, as before.
 
-**Alternative, for later:** keep the exit component and point its URL at the
-sink, as inline tests already do with `pipelinetest.loki.url`. That tests
-external labels and the protocol, but needs to know each component's URL
-argument, and needs an OTLP endpoint in the sink. It could be an opt-in per
-sink.
+**Decided: the sink applies the exit's `external_labels`, and nothing else.**
+The `external_labels` expression is copied to the sink as written and
+evaluated by Alloy, so `sys.env` works, with `env` in the test file setting
+the variables. A label the data already has wins, as in `loki.write` and
+`prometheus.remote_write`.
+
+Not done, and not planned until users ask for it:
+
+- `write_relabel_config`. It is a nested block, so the sink would have to
+  reimplement Prometheus write relabeling, and it blurs what the sink
+  emulates.
+- Keeping the real writer and pointing its URL at the sink. It tests the
+  most, but auth must be stripped, `batch_wait` slows every test, and OTLP
+  exporters need an OTLP server in the sink.
 
 ### Entry components
 
