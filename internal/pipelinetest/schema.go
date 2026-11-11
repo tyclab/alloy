@@ -40,16 +40,9 @@ type FlagsSchema struct {
 	LokiPipelineV2 bool `yaml:"feature.loki.pipeline-v2.enabled,omitempty"`
 }
 
-// ConfigSchema is the Alloy configuration under test. It is either inline
-// Alloy source, or a mapping that points at a file and lists the components to
-// swap for the test harness:
-//
-//	config:
-//	  path: ./config.alloy
-//	  sinks: [loki.write.default]
-//	  remove: [discovery.kubernetes.pods]
-//
-// Entry components are replaced by the inputs that name them with replace.
+// ConfigSchema is the Alloy configuration under test: inline source, or a
+// file path with the components to swap. Inputs replace entry components with
+// replace.
 type ConfigSchema struct {
 	// Source is the Alloy source. It is set directly for inline configs, and
 	// read from Path otherwise.
@@ -64,14 +57,9 @@ type ConfigSchema struct {
 	// Remove lists components to delete from the config, such as discovery
 	// components that need a real environment. Nothing may reference them.
 	Remove []string `yaml:"remove,omitempty"`
-	// Override sets top-level attributes of components to new values, such as
-	// a file path that only exists where the config is deployed:
-	//
-	//	override:
-	//	  loki.secretfilter.default: {gitleaks_config: ./gitleaks.toml}
-	//
-	// Values are literals. Only attributes the config already sets can be
-	// overridden.
+	// Override sets top-level attributes to literal values, such as a file
+	// path that only exists in production. It only replaces attributes the
+	// config already sets.
 	Override map[string]map[string]any `yaml:"override,omitempty"`
 }
 
@@ -137,18 +125,9 @@ type AssertionSchema struct {
 // metadata. Mode controls whether Values must match exactly or be contained in
 // the actual field.
 //
-// It accepts two forms. The full form sets the mode:
-//
-//	labels:
-//	  mode: partial
-//	  values: {job: api}
-//
-// The short form is a plain map, and uses the field's default mode:
-//
-//	labels: {job: api}
-//
-// A mapping is read as the full form when its keys are only mode and values,
-// and values, if set, is itself a mapping.
+// It takes a plain map, which uses the field's default mode, such as
+// labels: {job: api}, or the full form with mode and values. A map whose only
+// keys are mode and values, with values a map, is the full form.
 type MapMatchSchema struct {
 	Mode   string            `yaml:"mode,omitempty"`
 	Values map[string]string `yaml:"values,omitempty"`

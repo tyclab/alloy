@@ -93,13 +93,9 @@ type sourceReplacement struct {
 	signal signal
 }
 
-// transformConfig removes the replaced, sink and removed components from src
-// and rewrites every reference to a sink component to the test sink.
-//
-// It edits the source text instead of printing a modified AST, so the user's
-// formatting and comments survive. Removed blocks are replaced with as many
-// newlines as they spanned, so line numbers in load errors still point at the
-// user's file.
+// transformConfig applies spec to src. It edits the text in place rather than
+// printing a modified syntax tree, so comments, formatting and line numbers
+// survive: a removed block becomes as many newlines as it spanned.
 // transformSpec lists what transformConfig changes.
 type transformSpec struct {
 	sources []sourceReplacement

@@ -14,10 +14,8 @@ import (
 	"github.com/grafana/alloy/internal/pipelinetest/harness"
 )
 
-// TraceInputSchema describes OTLP spans sent into the pipeline, either to the
-// consumers in Components, such as otelcol.processor.batch.default.input, or,
-// with Replace, to wherever an entry component such as
-// otelcol.receiver.otlp.default sent its traces in output.traces.
+// TraceInputSchema sends spans to Components, or, with Replace, where an
+// OTel receiver such as otelcol.receiver.otlp.default sent its traces.
 type TraceInputSchema struct {
 	Components []string     `yaml:"components,omitempty"`
 	Replace    string       `yaml:"replace,omitempty"`
@@ -56,10 +54,8 @@ type TraceAssertionSchema struct {
 	Match TraceMatchSchema `yaml:"match,omitempty"`
 }
 
-// TraceMatchSchema describes span fields used by declarative assertions.
-// Unlike labels on logs and metrics, attribute maps match partially by
-// default, because SDKs and processors add attributes of their own. Set mode:
-// exact to require an exact match.
+// TraceMatchSchema matches span fields. Attribute maps match partially by
+// default, because SDKs and processors add their own attributes.
 type TraceMatchSchema struct {
 	Name string `yaml:"name,omitempty"`
 	// ServiceName matches the service.name resource attribute.

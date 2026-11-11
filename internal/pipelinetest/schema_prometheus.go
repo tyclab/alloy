@@ -157,24 +157,17 @@ func toLabels(values map[string]string) labels.Labels {
 	return builder.Labels()
 }
 
-// PrometheusInputSchema describes Prometheus samples sent into the pipeline,
-// either to the receivers in Components or, with Replace, to wherever an entry
-// component such as prometheus.scrape.default forwarded its samples.
-//
-// A replaced prometheus.scrape no longer adds the job and instance labels of
-// its targets, so set them on the samples when the pipeline relies on them.
+// PrometheusInputSchema sends samples to Components, or, with Replace, where
+// an entry component such as prometheus.scrape.default sent its samples. A
+// replaced scrape doesn't add job and instance, so set them if needed.
 type PrometheusInputSchema struct {
 	Components []string                 `yaml:"components,omitempty"`
 	Replace    string                   `yaml:"replace,omitempty"`
 	Samples    []PrometheusSampleSchema `yaml:"samples"`
 }
 
-// PrometheusSampleSchema is one sample. Identify the series with Series, in
-// the text exposition form such as
-//
-//	http_requests_total{method="post", code="200"}
-//
-// or with Labels, which must then include __name__.
+// PrometheusSampleSchema is one sample. Set Series in text exposition form,
+// such as http_requests_total{code="200"}, or Labels including __name__.
 type PrometheusSampleSchema struct {
 	Series string            `yaml:"series,omitempty"`
 	Labels map[string]string `yaml:"labels,omitempty"`

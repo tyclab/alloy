@@ -48,10 +48,9 @@ func registerSink() {
 }
 
 type SinkArguments struct {
-	// ExternalLabels are added to every captured log entry and sample that
-	// does not already have the label, as loki.write and
-	// prometheus.remote_write do. A sink that replaces an exit component gets
-	// that component's external_labels.
+	// ExternalLabels are added to captured entries and samples that lack
+	// them, as loki.write and prometheus.remote_write do. A sink replacing an
+	// exit gets the exit's external_labels.
 	ExternalLabels map[string]string `alloy:"external_labels,attr,optional"`
 }
 

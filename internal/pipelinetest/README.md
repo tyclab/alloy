@@ -1,16 +1,16 @@
 # Pipeline tests
 
 A pipeline test runs an Alloy configuration in process, sends it data, and
-asserts on what comes out. It needs no network, no containers and no backend,
-so a test runs in well under a second once its data arrives.
+checks what comes out. It needs no network, containers or backend, so it
+usually finishes in under a second.
 
-Pipeline tests run in two ways:
+You can run pipeline tests in two ways:
 
-- `go test ./internal/pipelinetest/`, which runs every `tests/*/test.yaml`.
-  This is how Alloy tests itself.
-- `alloy test`, which runs any test file. **Experimental**: the command, the
-  file format and the JSON output may change in any release. Design decisions
-  and how to revisit them are in [DECISIONS.md](DECISIONS.md).
+- `go test ./internal/pipelinetest/` runs every `tests/*/test.yaml`. Alloy
+  uses this to test itself.
+- `alloy test` runs any test file. It's **experimental**: the command, the
+  file format and the JSON output can change in any release. For the design
+  and how to change it, refer to [DECISIONS.md](DECISIONS.md).
 
 ## Run tests
 
@@ -18,44 +18,47 @@ Pipeline tests run in two ways:
 alloy test                       # every test file under the current directory
 alloy test ./tests/checkout.test.yaml ./tests/logs/
 alloy test --output=json .       # one JSON report, for CI or an agent
-alloy test --timeout=1m -v .     # retry assertions longer; show Alloy's logs
+alloy test --timeout=1m -v .     # retry assertions longer, and show Alloy's logs
 ```
 
-A directory is searched recursively for files named `test.yaml` or ending in
-`.test.yaml`. The exit status is 0 when every test passes and 1 otherwise.
+`alloy test` searches directories for files named `test.yaml` or ending in
+`.test.yaml`. It exits with 0 when every test passes, and 1 otherwise.
 
-Text output marks each assertion with ✓ or ✗. For a failed test it also shows
-what reached the sink, and any component that is not healthy, which usually
-explains the failure. A test that cannot run, for example because its config
-does not load, is reported as an error. The error names the line in your own
-config file.
+Each assertion shows ✓ or ✗. A failed test also shows what reached the sink
+and which components are unhealthy. A test that can't run shows ERROR, with
+the line in your config that caused it.
 
 ## Test a real configuration
 
-Test the config you deploy, unchanged. The test file names the config and
-swaps its edges for the harness:
+You can test the config you deploy without changing it. The test file swaps
+the config's edges for the harness:
 
 1. **Point at the config.** Set `config.path`, relative to the test file.
 2. **Swap the exits.** List each `loki.write`, `prometheus.remote_write` and
-   `otelcol.exporter.*` under `config.sinks`. Its data goes to the test sink,
-   so no backend or credentials are needed.
-3. **Swap the entries.** For each source, such as `loki.source.file` or
-   `prometheus.scrape`, add an input with `replace: <component id>`. The
-   input's data goes where the source sent it.
-4. **Replace or remove what needs a real environment.** Replace a
-   `discovery.*` component with fake targets to test the relabel rules after
-   it. List anything else under `config.remove`, with whatever references it.
-   If a component reads a file that only exists where it is deployed, point
-   it elsewhere with `config.override`, such as
-   `loki.secretfilter.default: {gitleaks_config: ./gitleaks.toml}`. Override
-   only replaces attributes the config sets.
-5. **Write inputs** that exercise the processing: a record each pipeline
-   keeps, one it drops, one it rewrites.
-6. **Assert** what should come out of each.
-7. **Run `alloy test`** until it passes. A ✗ shows what reached the sink
-   instead. An ERROR means the config did not load, and names the line.
+   `otelcol.exporter.*` under `config.sinks`. Each exit gets its own sink,
+   which captures the data and adds the exit's `external_labels`.
+3. **Swap the entries.** Add an input with `replace: <component>` for each
+   source, such as `loki.source.file` or `prometheus.scrape`. The input sends
+   its data where the source sent it.
+4. **Handle what needs a real environment.**
+   - Replace a `discovery.*` component with a `targets` input to test the
+     relabel rules after it.
+   - Point a file or endpoint that only exists in production elsewhere with
+     `config.override`, such as
+     `loki.secretfilter.default: {gitleaks_config: ./gitleaks.toml}`.
+   - Set the variables the config reads with `sys.env` under `env`.
+   - List anything else under `config.remove`, along with whatever
+     references it.
+5. **Write inputs.** For each pipeline, send a record it keeps, one it drops,
+   and one it rewrites.
+6. **Assert** what comes out. Add `sink: <exit>` to check routing, such as
+   audit logs reaching only the audit writer.
+7. **Run `alloy test`** until it passes.
 
 ```yaml
+env:
+  CLUSTER_NAME: prod-eu
+
 config:
   path: config.alloy
   sinks: [loki.write.cloud]
@@ -71,36 +74,29 @@ inputs:
 assert:
   loki:
     - name: the level becomes a label
-      match: {selector: '{service_name="app", level="info"}'}
+      sink: loki.write.cloud
+      match: {selector: '{service_name="app", level="info", cluster="prod-eu"}'}
     - name: debug lines are dropped
       count: 0
       match: {selector: '{level="debug"}'}
 ```
 
-[tests/real-config](tests/real-config) does the same for metrics and traces.
+For metrics and traces as well, refer to [tests/real-config](tests/real-config).
 
-What the test does not cover:
+A test doesn't cover:
 
-- The swapped components themselves. Each exit's sink applies its
-  `external_labels`, and nothing else: write relabel rules, batching, auth
-  and the wire protocol are not tested. A replaced `prometheus.scrape` no
-  longer adds `job` and `instance`, so set them on the samples if the
-  pipeline uses them.
-- Components inside modules. Only top-level ones can be swapped.
-
-Each exit gets its own sink. Add `sink: <exit>` to an assertion to check only
-what that exit received, for example that audit logs go to the audit writer
-and never to the main one. Without `sink`, an assertion checks every sink.
-
-If the config reads environment variables with `sys.env`, set them under
-`env`, such as `env: {CLUSTER_NAME: prod-eu}`.
+- **The swapped components:** an exit's sink applies its `external_labels`
+  and nothing else, so write relabel rules, batching, auth and the wire
+  protocol aren't tested. A replaced `prometheus.scrape` doesn't add `job`
+  and `instance`, so set them on your samples if the pipeline uses them.
+- **Components inside modules:** you can only swap top-level components.
 
 Paths inside the config, such as `import.file` filenames, are relative to the
-directory `alloy test` runs in, as for `alloy run`.
+directory you run `alloy test` in, as they are for `alloy run`.
 
-### With an agent
+### Write a test with an agent
 
-An agent can do steps 2 to 7. A prompt that works:
+An agent can do steps 2 to 7. This prompt works:
 
 > Write an `alloy test` file for `config.alloy`, using the format in
 > `internal/pipelinetest/README.md` of the Alloy repository. Send a few
@@ -110,7 +106,8 @@ An agent can do steps 2 to 7. A prompt that works:
 
 ## File format
 
-A test file has five sections. Only `config` and `assert` are required.
+A test file has these sections. Only `config` and `assert` are required, and
+unknown fields fail the test.
 
 ```yaml
 flags: {}        # Alloy run flags, such as feature.loki.pipeline-v2.enabled: true
@@ -118,15 +115,21 @@ env: {}          # environment variables the config reads with sys.env
 config: ...      # the Alloy configuration under test
 mocks: {}        # stub upstreams the config can call
 inputs: {}       # data to send into the pipeline
-assert: {}       # what must reach the sink
+assert: {}       # what must come out
 ```
-
-Unknown fields are rejected, so a typo fails the test instead of being
-ignored.
 
 ### `config`
 
-Inline Alloy source:
+Use inline Alloy source, or a file with components to swap as shown above.
+Inline configs send to the sink through these references:
+
+| Reference                          | Use as                            |
+| ---------------------------------- | --------------------------------- |
+| `pipelinetest.loki.receiver`       | a `forward_to` entry for logs     |
+| `pipelinetest.loki.url`            | a `loki.write` endpoint URL       |
+| `pipelinetest.prometheus.receiver` | a `forward_to` entry for metrics  |
+| `pipelinetest.prometheus.url`      | a `prometheus.remote_write` URL   |
+| `pipelinetest.otel.input`          | an `output` entry for OTLP traces |
 
 ```yaml
 config: |
@@ -135,21 +138,12 @@ config: |
   }
 ```
 
-or a file with the components to swap, as shown above. Inline configs send to
-the sink through these references:
-
-| Reference                           | Use as                                 |
-| ----------------------------------- | -------------------------------------- |
-| `pipelinetest.loki.receiver`        | a `forward_to` entry for logs          |
-| `pipelinetest.loki.url`             | a `loki.write` endpoint URL            |
-| `pipelinetest.prometheus.receiver`  | a `forward_to` entry for metrics       |
-| `pipelinetest.prometheus.url`       | a `prometheus.remote_write` URL        |
-| `pipelinetest.otel.input`           | an `output` entry for OTLP traces      |
+`config.override` only replaces attributes the config already sets.
 
 ### `inputs`
 
-Each input sends to the receivers in `components`, or replaces an entry
-component with `replace`. Set one of them.
+Each input sends to the receivers in `components`, or replaces a component
+with `replace`. Set one of them. A `targets` input only takes `replace`.
 
 ```yaml
 inputs:
@@ -165,7 +159,7 @@ inputs:
       samples:
         - series: 'http_requests_total{method="post"}'   # or labels: {__name__: ..., ...}
           value: 1027
-          type: counter                                  # optional metadata: type, help, unit
+          type: counter                                  # optional: type, help, unit
   traces:
     - components: [otelcol.processor.batch.default.input]
       spans:
@@ -176,94 +170,77 @@ inputs:
           attributes: {http.route: /checkout}
           resource_attributes: {k8s.namespace.name: shop}
   targets:
-    - replace: discovery.kubernetes.pods      # its .targets become this list
+    - replace: discovery.kubernetes.pods  # references to its targets get this list
       targets:
         - __address__: 10.0.0.1:8080
           __meta_kubernetes_namespace: shop
           __meta_kubernetes_pod_container_port_name: http-metrics
 ```
 
-To test components that receive data on their own listener, send to it
-directly with `http`, `tcp` or `udp` inputs. See `HTTPInputSchema`,
-`TCPInputSchema` and `UDPInputSchema` in the Go source, and the
-`loki-source-*` tests for examples.
+To send data to a component's own listener, use `http`, `tcp` or `udp`
+inputs. For examples, refer to the `loki-source-*` tests.
 
 ### `mocks`
 
-`mocks.http` starts stub HTTP servers with canned responses, for components
-that pull from an API or probe an endpoint. Reference one from the config as
-`pipelinetest.mocks.http.<name>.url`. See `prometheus-exporter-blackbox`.
+`mocks.http` starts stub HTTP servers for components that call an API or
+probe an endpoint. Reference one in the config as
+`pipelinetest.mocks.http.<name>.url`. For an example, refer to the
+`prometheus-exporter-blackbox` test.
 
 ### `assert`
 
-Assertions are grouped by signal: `loki`, `prometheus`, `traces` and
-`targets`. Each
-assertion is one of two types:
+Group assertions by signal: `loki`, `prometheus`, `traces` and `targets`.
 
-- `contains` passes when at least one item matches.
-- `count` passes when exactly `count` items match. With no `match`, it counts
-  everything of that signal.
+- An assertion with `count` passes when exactly that many items match. With
+  no `match`, it counts everything of that signal.
+- Any other assertion passes when at least one item matches.
+- `name` labels the assertion in reports.
+- `sink` limits the assertion to one exit's sink.
 
-`type` can be left out: an assertion with `count` is a count assertion, and
-any other is `contains`. `name` is optional and shows in reports. `sink`
-limits an assertion to one exit's sink.
+The harness retries all assertions until they pass together, or the timeout
+expires. A `count: 0` can pass before the data it rules out arrives, so pair
+it with an assertion on data you send alongside.
 
-Assertions are retried until they all pass at once, or the timeout expires.
-So `count: 0` can pass before the data it rules out arrives. Pair it with a
-`contains` assertion on data sent alongside it.
-
-**Logs** match on `selector`, `labels`, `line`, `line_regex`, `timestamp`
-and `structured_metadata`. `line` is exact; `line_regex` matches anywhere in
-the line:
+| Signal       | Match fields                                                                            |
+| ------------ | --------------------------------------------------------------------------------------- |
+| `loki`       | `selector`, `labels`, `line` (exact), `line_regex`, `timestamp`, `structured_metadata`  |
+| `prometheus` | `selector`, `labels`, `value`, `timestamp`, `histogram`, `metadata` (type, unit, help) |
+| `traces`     | `name`, `service_name`, `kind`, `status`, `scope`, `attributes`, `resource_attributes`  |
+| `targets`    | `selector`, `labels`, plus `from`: the export to read, such as `discovery.relabel.pods.output` |
 
 ```yaml
-- match:
-    selector: '{service_name="api", level=~"warn|error"}'   # the entry may carry other labels
-    line: 'boom'
+assert:
+  prometheus:
+    - match:
+        selector: 'probe_success{job="blackbox"}'
+        value: 1
+  targets:
+    - from: discovery.relabel.pods.output
+      match:
+        labels: {job: shop/api, __address__: 10.0.0.1:8080}
 ```
 
-**Metrics** match on `selector`, `labels`, `value`, `timestamp`, `histogram`
-and `metadata` (`type`, `unit`, `help`):
+`selector` is a PromQL series selector with `=`, `!=`, `=~` and `!~`. It's the
+shortest way to match, and it ignores labels it doesn't name.
+
+Label and attribute maps take a plain map, or a mode and values:
 
 ```yaml
-- match:
-    selector: 'probe_success{job="blackbox"}'
-    value: 1
-```
-
-**Traces** match on `name`, `service_name`, `kind`, `status`, `scope`,
-`attributes` and `resource_attributes`.
-
-**Targets** check the targets a component exports, named by `from`, and match
-on `selector` and `labels`:
-
-```yaml
-- from: discovery.relabel.pods.output
-  match:
-    labels: {job: shop/api, __address__: 10.0.0.1:8080}
-```
-
-`selector` is a PromQL series selector, with the `=`, `!=`, `=~` and `!~`
-operators. It is the shortest way to match, and the series may carry labels it
-does not name. `labels`, `structured_metadata` and the trace attribute maps
-take a plain map, or a mode and values:
-
-```yaml
-labels: {level: error, service_name: api}     # default mode
+labels: {level: error, service_name: api}
 labels:
-  mode: partial                                # exact or partial
+  mode: partial       # exact or partial
   values: {level: error}
 ```
 
-The default mode is `exact` for log and metric labels, and `partial` for span
-attributes and target labels, which carry many labels a test does not care
+Log and metric labels default to `exact`. Span attributes and target labels
+default to `partial`, because they carry many labels a test doesn't care
 about.
 
 ### Not supported yet
 
-- Profiles: `pyroscope.write` cannot be replaced with the sink, and there are
-  no profile inputs or assertions.
-- OTLP metrics and logs reach the sink and are counted in the report, but
-  cannot be asserted on. Convert them to Prometheus or Loki in the config to
-  test them today.
-- Swapping components inside modules.
+- **Profiles:** you can't swap `pyroscope.write`, and there are no profile
+  inputs or assertions.
+- **OTLP metrics and logs:** they reach the sink and the report counts them,
+  but you can't assert on them. Convert them to Prometheus or Loki in the
+  config to test them.
+- **Modules:** you can't swap components inside modules.

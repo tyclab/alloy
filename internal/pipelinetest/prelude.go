@@ -8,16 +8,10 @@ import (
 	builder "github.com/grafana/alloy/syntax/token/builder"
 )
 
-// buildSource builds the final Alloy source for a pipeline test. It replaces
-// the config's entry and exit components as the test asks, rewrites
-// pipelinetest symbolic references, and appends the test sink, mocks and
-// generated input sources.
-//
-// Everything generated goes after the config, so line numbers in errors about
-// the config still point at the user's file.
-//
-// It also returns the sinks that replace exit components, keyed by exit ID,
-// with their component IDs.
+// buildSource builds the Alloy source a test runs: the transformed config,
+// then the sinks, mocks and input sources. Generated code goes after the
+// config, so error line numbers still match the user's file. It also returns
+// each exit's sink component ID, keyed by exit ID.
 func buildSource(schema TestSchema) (string, map[string]string, error) {
 	inputs := collectInputs(schema.Inputs)
 

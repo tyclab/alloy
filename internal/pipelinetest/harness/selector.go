@@ -10,13 +10,10 @@ import (
 	"github.com/grafana/alloy/internal/component/common/loki"
 )
 
-// ParseSelector parses a PromQL-style series selector, such as
-//
-//	probe_success{job="blackbox", instance=~"prod-.*"}
-//
-// or, for Loki streams, a stream selector such as {service_name="api"}. It
-// supports the =, !=, =~ and !~ operators. A selector matches when every
-// matcher matches, so the series may carry labels the selector does not name.
+// ParseSelector parses a PromQL series selector, such as
+// probe_success{job="blackbox"}, or a Loki stream selector, which has the same
+// syntax. A series matches when every matcher does, so it can carry other
+// labels.
 func ParseSelector(selector string) ([]*labels.Matcher, error) {
 	matchers, err := promql_parser.NewParser(promql_parser.Options{}).ParseMetricSelector(selector)
 	if err != nil {

@@ -10,11 +10,9 @@ import (
 	builder "github.com/grafana/alloy/syntax/token/builder"
 )
 
-// TargetInputSchema replaces a discovery component, such as
-// discovery.kubernetes.pods, with a fixed list of targets. Every reference to
-// its targets export becomes that list, so the relabel rules downstream run
-// against targets the test controls. Write targets as discovery would emit
-// them, including the __meta_ labels the rules read.
+// TargetInputSchema replaces a discovery component's targets export with a
+// fixed list, so the relabel rules after it run on targets the test controls.
+// Include the __meta_ labels the rules read.
 type TargetInputSchema struct {
 	Replace string              `yaml:"replace"`
 	Targets []map[string]string `yaml:"targets"`

@@ -46,10 +46,8 @@ type Config struct {
 
 var registerOnce sync.Once
 
-// Register adds the pipelinetest.* components to the component registry. It
-// is safe to call more than once. NewAlloy calls it, so the components only
-// exist in a process that runs pipeline tests, and the Alloy binary does not
-// offer them to production configs.
+// Register adds the pipelinetest.* components to the registry, once.
+// NewAlloy calls it, so only a process that runs tests has them.
 func Register() {
 	registerOnce.Do(func() {
 		registerSink()

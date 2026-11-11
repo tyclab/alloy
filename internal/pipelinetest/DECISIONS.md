@@ -1,247 +1,212 @@
-# Pipeline tests as a user-facing feature: decisions
+# Pipeline test decisions
 
-This records the choices made for the first, experimental version of
-`alloy test`. Each states what was chosen, why, and how to change it. Nothing
-here is hard to reverse yet: the command is marked experimental, and nothing
-outside this package depends on the format.
+This page records the design choices behind the experimental `alloy test`:
+what we chose, why, and how to change it. None of them is hard to reverse
+yet, because the command is experimental and nothing outside this package
+depends on the format.
 
-The user guide is [README.md](README.md).
+For how to write and run tests, refer to [README.md](README.md).
 
-## Scope of the first version
+## Scope
 
-In:
+The first version includes:
 
-- `alloy test` with text and JSON output.
-- Testing a real config file unchanged, by swapping its entry and exit
-  components for the harness, and removing components that need a real
-  environment.
-- Logs and metrics, as before, plus OTLP traces: span inputs, a traces sink,
-  and span assertions. Metrics gain a sample input, so `prometheus.scrape` can
-  be replaced.
-- Shorter assertions: `selector`, an inferred `type`, plain maps for labels,
-  and an optional `name`.
-- An example real config tested end to end, in [tests/real-config](tests/real-config).
+- **Command:** `alloy test` with text and JSON output.
+- **Real configs:** a test swaps a config's entry and exit components, replaces
+  discovery with fake targets, overrides attributes and removes components,
+  without editing the config.
+- **Signals:** logs, metrics and OTLP traces, plus discovery targets.
+- **Routing:** each exit gets its own sink, so assertions can check where data
+  goes.
+- **Shorter assertions:** `selector`, an inferred type, plain maps, `name` and
+  `line_regex`.
+- **Example:** [tests/real-config](tests/real-config) tests a realistic config
+  end to end.
 
-Out, and the likely next steps:
+Likely next steps:
 
-1. **Profiles.** Add a `pyroscope.write` sink target, a profile input, and
-   assertions on profile labels and sample types.
-2. **OTLP metrics and logs.** The sink counts them but cannot assert on them.
-   Either flatten them like spans, or convert them to the Prometheus and Loki
-   forms the assertions already understand.
-3. **`alloy test init config.alloy`.** Generate the test skeleton
-   deterministically: the sinks and replaced inputs follow from component
-   names, as the tables below show. That leaves only the data and the
-   assertions to a human or an agent.
-4. **Swapping components inside modules.**
-5. **`hold_for`**, so a `count` must keep passing for a while. See "Retrying
-   assertions" below.
-6. **A version field in the JSON report**, before the format is called stable.
+1. **Profiles:** a `pyroscope.write` sink, profile inputs and assertions.
+2. **OTLP metrics and logs:** the sink counts them but can't assert on them.
+3. **`alloy test init config.alloy`:** generate the sinks, replacements and
+   removals from component names. A real metrics config needed 154 removals.
+4. **Which rule fired:** assert on Alloy's own metrics, such as
+   `loki_process_dropped_lines_total{reason=...}`.
+5. **Coverage:** report the match blocks and relabel rules no input reached.
+6. **Modules:** swap components inside modules.
+7. **`hold_for`:** keep a `count` passing for a while. Refer to
+   [Retries](#retries).
+8. **A version field in the JSON report**, before the format is stable.
 
-## The command
+## Command
 
-**Chosen:** a top-level `alloy test [path ...]`. It is labelled experimental
-in its help, and is not gated behind `--stability.level`.
+We chose a top-level `alloy test [path ...]`, labelled experimental in its
+help and not gated behind `--stability.level`.
 
-**Why:** users run their configs with `alloy run` and check them with
-`alloy validate`, so `alloy test` is where they will look. A stability flag on
-a command that changes nothing at runtime adds friction without protecting
-anything.
+Users run configs with `alloy run` and check them with `alloy validate`, so
+they look for `alloy test` next to those. A stability flag adds friction
+without protecting anything, because the command doesn't change a running
+Alloy.
 
-**To change:** the command is a thin wrapper in
-`internal/alloycli/cmd_pipelinetest.go` around `pipelinetest.RunFiles`.
-Renaming it, or moving it under `alloy tools`, touches that one file.
+To rename or move the command, change `internal/alloycli/cmd_pipelinetest.go`.
+It wraps `pipelinetest.RunFiles`.
 
-## The harness ships in the binary
+## Harness in the binary
 
-**Chosen:** the `pipelinetest.*` components are part of the `alloy` binary.
-They are registered on first use by `harness.Register`, not in `init`, so they
-only exist in a process that runs tests. `alloy run` cannot use them, and the
-component list the OTel engine checks is unchanged.
+The `pipelinetest.*` components ship in the `alloy` binary.
+`harness.Register` registers them on first use, not in `init`, so only a
+process running tests has them. `alloy run` can't use them.
 
-**Why:** a separate binary is one more thing to install and to keep at the
-same version as Alloy. Tests must run the exact components the user runs.
+A separate binary is one more thing to install and keep at Alloy's version,
+and tests must run the components users run. If binary size becomes a
+problem, build `alloy test` as its own binary from the same package.
 
-**To change:** if binary size or the dependency surface becomes a concern,
-build `alloy test` into a separate binary from the same package. Nothing in
-the package assumes it is linked into `alloy`.
+## Swapping components
 
-## Swapping components in a real config
+The test lists what to swap, so the config under test is the one you deploy:
 
-**Chosen:** the test names a config file and lists what to swap:
+- `config.sinks` replaces exits with sinks.
+- `inputs.<signal>[].replace` replaces an entry component with that input.
+- `inputs.targets[].replace` replaces a discovery component with fixed
+  targets.
+- `config.override` sets a component's top-level attribute.
+- `config.remove` deletes a component.
 
-- `config.sinks`: exit components, replaced by the sink.
-- `inputs.<signal>[].replace`: entry components, replaced by that input.
-- `config.remove`: components deleted outright.
+The harness edits the config's text at positions from the parsed syntax
+tree. A removed block becomes as many blank lines as it spanned, and
+generated components go after the config. This keeps comments, formatting
+and line numbers, so a load error points at the right line of your file.
 
-The swap edits the config's source text, using positions from the parsed
-syntax tree. Removed blocks become as many blank lines as they spanned, and
-everything generated goes after the config. So comments and formatting
-survive, and every line number in a load error still points at the user's
-file.
+We considered one `config.replace` map for everything. It's one place to
+look, but inputs would then need a second way to say what they replace.
+Printing a modified syntax tree is simpler code, but loses comments and line
+numbers.
 
-**Why:** writing the swaps into the test, not the config, means the config
-under test is byte for byte the one deployed. Putting `replace` on the input
-keeps each entry component next to the data that stands in for it.
-
-**Alternatives:** one `config.replace: {component: sink | input}` map. It is
-one place to look, but then inputs need a second way to say which replacement
-they feed. Printing a modified syntax tree is simpler code, but loses
-comments and shifts line numbers.
-
-**To change:** the schema lives in `ConfigSchema` and the input schemas, and
-the logic in `config_transform.go`. Only top-level blocks are swapped.
-Supporting modules means searching `declare` bodies and resolving
+The logic lives in `config_transform.go`. Only top-level blocks can be
+swapped. Supporting modules means searching `declare` bodies and resolving
 `import.*` sources.
 
-### Exit components
+### Exits
 
-| Component                 | Reference rewritten | Sink export                            |
-| ------------------------- | ------------------- | -------------------------------------- |
-| `loki.write`              | `<id>.receiver`     | `pipelinetest.sink.<id>.loki_receiver` |
+| Component                 | Reference rewritten | Sink export                                  |
+| ------------------------- | ------------------- | -------------------------------------------- |
+| `loki.write`              | `<id>.receiver`     | `pipelinetest.sink.<id>.loki_receiver`       |
 | `prometheus.remote_write` | `<id>.receiver`     | `pipelinetest.sink.<id>.prometheus_receiver` |
-| `otelcol.exporter.*`      | `<id>.input`        | `pipelinetest.sink.<id>.otel_input`    |
+| `otelcol.exporter.*`      | `<id>.input`        | `pipelinetest.sink.<id>.otel_input`          |
 
-`<id>` is the exit's ID with dots replaced by underscores, such as
-`loki_write_default`.
+`<id>` is the exit's ID with underscores for dots, such as
+`loki_write_default`. The harness rejects other components, and references
+to other exports of an exit.
 
-Any other component is rejected with the list above. A reference to another
-export of a sink component, such as an exporter's `.something`, is an error,
-not a silent miss.
+Each exit gets its own sink, so `sink: <exit>` on an assertion checks
+routing. Without `sink`, an assertion checks every sink.
 
-Each exit gets its own sink, so an assertion with `sink: <exit>` checks
-routing, such as audit logs reaching the audit writer and never the main one.
-Without `sink`, an assertion checks every sink, as before.
+**The sink applies the exit's `external_labels`, and nothing else.** The
+harness copies the expression as written and Alloy evaluates it, so
+`sys.env` works with `env` from the test file. A label the data already has
+wins, as in `loki.write` and `prometheus.remote_write`.
 
-**Decided: the sink applies the exit's `external_labels`, and nothing else.**
-The `external_labels` expression is copied to the sink as written and
-evaluated by Alloy, so `sys.env` works, with `env` in the test file setting
-the variables. A label the data already has wins, as in `loki.write` and
-`prometheus.remote_write`.
+We don't plan to emulate more until users ask for it:
 
-Not done, and not planned until users ask for it:
+- **`write_relabel_config`:** it's a nested block, so the sink would have to
+  reimplement Prometheus write relabeling.
+- **The real writer, pointed at the sink:** it tests the most, but needs auth
+  stripped, `batch_wait` makes every test slower, and OTLP exporters need an
+  OTLP server in the sink.
 
-- `write_relabel_config`. It is a nested block, so the sink would have to
-  reimplement Prometheus write relabeling, and it blurs what the sink
-  emulates.
-- Keeping the real writer and pointing its URL at the sink. It tests the
-  most, but auth must be stripped, `batch_wait` slows every test, and OTLP
-  exporters need an OTLP server in the sink.
+### Entries
 
-### Entry components
+An input takes the replaced component's `forward_to`, or `output.traces` for
+OTel receivers, as written, with sink references rewritten. What the entry
+component does itself isn't tested: a replaced `prometheus.scrape` doesn't
+add `job` and `instance`.
 
-A replaced component's `forward_to` expression becomes the input's
-destination. For OTel receivers it is `output.traces`. The expression is
-copied as written, with any sink references in it rewritten.
+We could keep the scrape and point it at a generated
+`prometheus.exporter.static`. That tests the scrape's own labels, but forces
+a short scrape interval on it, and the test waits for a scrape.
 
-**Consequence:** what the entry component does itself is not tested either.
-In particular a replaced `prometheus.scrape` no longer adds `job` and
-`instance`.
+### Discovery
 
-**Alternative, for metrics:** keep the scrape and point its `targets` at a
-generated `prometheus.exporter.static`. That tests the scrape's own labels,
-but needs a short scrape interval to be forced on it, and the test waits for
-a scrape.
+A `targets` input rewrites references to a discovery component's `targets`
+export into a literal list, so the relabel rules after it run unchanged.
+`targets` assertions read any component's exported targets, such as
+`discovery.relabel.pods.output`.
+
+Testing a real metrics config showed most of its logic lives in
+`discovery.relabel`, which removing discovery skipped. A scrape fed these
+targets tries to reach the fake addresses, so replace or remove it.
+
+### Overrides
+
+`config.override` sets a top-level attribute to a literal, for files and
+endpoints that only exist in production, such as a secret filter's
+`gitleaks_config`. It only replaces attributes the config sets, which keeps
+the edit in place. It doesn't support nested blocks or expressions yet.
 
 ## Signals
 
-**Traces** were added in this version, because OTLP pipelines are a large
-part of real configs. Spans are flattened into one record each, with
-attributes rendered as strings, so assertions do not walk the resource and
-scope hierarchy.
+Spans are flattened into one record each, with attributes as strings, so
+assertions don't walk the resource and scope hierarchy.
 
-Attribute maps on spans match **partially** by default, unlike labels on logs
-and metrics, which match exactly as they did before. SDKs and processors add
-attributes, so an exact default would make almost every trace assertion
-verbose. The defaults are set per field in `buildSpanMatchers` and the Loki
-and Prometheus builders.
+Span attributes and target labels match partially by default, and log and
+metric labels exactly. SDKs, processors and discovery add many labels, so an
+exact default would make those assertions long.
 
-**Overrides** set a component's top-level attribute to a literal, for paths
-and endpoints that only exist where the config is deployed, such as a
-secret filter's `gitleaks_config`. Only attributes the config sets can be
-overridden, which keeps the edit in place and the line numbers intact.
-Nested blocks and expressions as values are not supported yet.
-
-**Discovery** is replaced, not run: a `targets` input rewrites every
-reference to a `discovery.*` component's `targets` export into a literal list.
-The relabel rules after it then run unchanged, and `targets` assertions read
-the result from any component's exports, such as
-`discovery.relabel.pods.output`. Testing a real metrics config showed most of
-its logic lives in `discovery.relabel`, which removing discovery skipped. A
-scrape fed these targets would try to reach the fake addresses, so replace or
-remove it.
-
-**Metric inputs** send samples straight to the destination's appender, in one
-transaction per destination. Each sample takes a series in text exposition
-form, `name{label="value"}`, because that is how users and agents already
-write series.
+Metric inputs append samples straight to the destination, in one transaction
+each. A sample's series uses the text exposition form,
+`name{label="value"}`, which users and agents already know.
 
 ## Assertions
 
-- **`selector`** is a PromQL series selector, parsed by Prometheus' own
-  parser, for both metrics and logs. A LogQL stream selector has the same
-  syntax. It replaced 6 lines with 1 for the common "this series exists with
-  these labels" check. `prometheus-exporter-blackbox` was converted, from 269
-  lines to 131.
-- **`type` is inferred**: `count` if `count` is set, otherwise `contains`.
-- **Plain maps** for labels: `labels: {job: api}`. A mapping is read as the
-  full form only when its keys are `mode` and `values`, with `values` a
-  mapping. The rare map of labels named `mode` and `values` must use the full
-  form.
-- **`name`** labels an assertion in reports. Without one, the report
-  describes the match fields.
+- **`selector`** is a PromQL series selector, and works for logs too, because
+  a LogQL stream selector has the same syntax. It turns 6 lines into 1:
+  `prometheus-exporter-blackbox` went from 269 lines to 131.
+- **The type is inferred:** `count` when `count` is set, otherwise `contains`.
+- **Plain maps** work for labels: `labels: {job: api}`. A map whose only keys
+  are `mode` and `values` is read as the full form.
+- **`line_regex`** matches lines with parts that vary, such as hashes.
+- **`name`** labels an assertion in reports. Without it, the report describes
+  the match.
 
-The old forms all still work. No test needed changing, apart from the
-optional conversion above.
+The old forms still work.
 
-### Retrying assertions
+### Retries
 
-All assertions are retried together until they all pass at once, or the
-timeout expires (`--timeout`, default 30s). This is unchanged from the Go
-harness. It means a `count: 0` assertion passes before the data it rules out
-arrives. The README tells users to pair it with a `contains` on data sent
-alongside. `hold_for`, listed above, would close the gap.
+The harness retries all assertions together until they pass at once, or the
+timeout expires (`--timeout`, 30s by default). So a `count: 0` can pass
+before the data it rules out arrives. `hold_for` would fix that.
 
-## Strictness
+## Strict parsing
 
-Test files are decoded with unknown fields rejected. This now applies to the
-Go suite too, and every existing test passed without change. A typo in a
-user-facing format otherwise fails silently: a misspelled `inputs` key shows
-up only as "0 entries" after the 30s timeout.
+Unknown fields in a test file fail the test. Otherwise a misspelled `inputs`
+key only shows up as "0 entries" after the timeout. Every existing test
+passed under this rule without changes.
 
-## Defaults that changed
+## Changed defaults
 
-- Log input entries without a `timestamp` are stamped with the time they are
-  sent, not the zero time. A real source never sends the zero time, and some
-  stages drop old entries. No existing test depended on the old default.
-- `config.path` is resolved against the test file's directory, not the
-  working directory. No existing test used it.
+- Log entries without a `timestamp` get the time they're sent, not the zero
+  time. Real sources never send the zero time, and some stages drop old
+  entries.
+- `config.path` is relative to the test file.
 
-Paths inside the Alloy config, such as `import.file` filenames, stay relative
-to the working directory, as they are for `alloy run`. `alloy test` does not
-change directory per test. Changing directory would make in-repo tests and
-user tests behave differently from `alloy run`.
+Paths inside the config stay relative to the working directory, as they are
+for `alloy run`.
 
 ## Output
 
-- **Text**, the default, streams one block per test file as it finishes:
-  ✓ and ✗ per assertion, then for a failure the unhealthy components and up
-  to 20 items per signal of what reached the sink. Color is on for a
-  terminal, honours `NO_COLOR`, and can be forced with `--color`.
-- **JSON** is one document at the end, `pipelinetest.Report`. A failed test
-  carries the captured data, at most 100 items per signal, with totals. A
-  passing test does not, which keeps reports small.
-- The exit status is 1 for failures and for tests that could not run. CI only
-  needs pass or fail; the report has the detail.
+- **Text** streams one block per test: ✓ or ✗ per assertion, and for a
+  failure the unhealthy components and up to 20 captured items per signal,
+  labelled with their sink. It uses color in a terminal unless `NO_COLOR` is
+  set.
+- **JSON** is one `pipelinetest.Report` at the end. A failed test includes up
+  to 100 captured items per signal. A passing test doesn't, which keeps the
+  report small.
+- The exit status is 1 for failures and errors alike.
 
-**Alternatives:** JSON Lines, streaming one object per test, suits long runs
-better. JUnit XML would plug into CI dashboards. Both are additions next to
-`WriteJSON` and `TextReporter` in `report.go`.
+JSON Lines or JUnit XML would go next to `WriteJSON` and `TextReporter` in
+`report.go`.
 
 ## Execution
 
-Tests run one after another. The harness uses the default Prometheus registry,
-because `prometheus.exporter.self` serves only that one. Running tests in
-parallel needs a registry per runtime.
-
-Each test gets a fresh temporary data directory, removed afterwards.
+Tests run one at a time, because the harness uses the default Prometheus
+registry, the only one `prometheus.exporter.self` serves. This also makes
+`env` safe to set on the process. Each test gets a fresh data directory.
