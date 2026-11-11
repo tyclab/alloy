@@ -16,14 +16,19 @@ import (
 // LokiInputSchema describes one Loki input, including the receiver targets to
 // forward entries to and the entries to emit for the test.
 type LokiInputSchema struct {
-	Components []string          `yaml:"components"`
-	Entries    []LokiEntrySchema `yaml:"entries,omitempty"`
+	Components []string `yaml:"components,omitempty"`
+	// Replace names an entry component of the config, such as
+	// loki.source.file.app. It is removed, and the entries are sent wherever
+	// its forward_to sent them. Set Components or Replace, not both.
+	Replace string            `yaml:"replace,omitempty"`
+	Entries []LokiEntrySchema `yaml:"entries,omitempty"`
 }
 
 // LokiEntrySchema describes one Loki entry in a declarative test file.
 type LokiEntrySchema struct {
-	Labels             map[string]string `yaml:"labels,omitempty"`
-	Line               string            `yaml:"line,omitempty"`
+	Labels map[string]string `yaml:"labels,omitempty"`
+	Line   string            `yaml:"line,omitempty"`
+	// Timestamp is RFC 3339. It defaults to the time the entry is sent.
 	Timestamp          string            `yaml:"timestamp,omitempty"`
 	StructuredMetadata map[string]string `yaml:"structured_metadata,omitempty"`
 }
@@ -32,13 +37,21 @@ type LokiEntrySchema struct {
 // assertions require Count and may optionally include match fields. Contains
 // assertions require at least one match field.
 type LokiAssertionSchema struct {
-	Type  string          `yaml:"type"`
+	// Name optionally describes the assertion in reports.
+	Name string `yaml:"name,omitempty"`
+	// Type is count or contains. When unset, it is count if Count is set and
+	// contains otherwise.
+	Type  string          `yaml:"type,omitempty"`
 	Count *int            `yaml:"count,omitempty"`
 	Match LokiMatchSchema `yaml:"match,omitempty"`
 }
 
 // LokiMatchSchema describes Loki entry fields used by declarative assertions.
 type LokiMatchSchema struct {
+	// Selector is a LogQL-style stream selector, such as
+	// {service_name="api", level=~"warn|error"}. The entry's labels must
+	// satisfy every matcher, and may carry others.
+	Selector           string         `yaml:"selector,omitempty"`
 	Line               string         `yaml:"line,omitempty"`
 	Timestamp          string         `yaml:"timestamp,omitempty"`
 	Labels             MapMatchSchema `yaml:"labels,omitempty"`
@@ -51,11 +64,7 @@ func produceLokiInputs(ctx context.Context, alloy *harness.Alloy, inputs []LokiI
 			continue
 		}
 
-		if len(input.Components) == 0 {
-			return fmt.Errorf("loki input %d requires at least one receiver target", i)
-		}
-
-		source := harness.MustComponent[*harness.Source](alloy, generatedLokiInputComponentID(i))
+		source := harness.MustComponent[*harness.Source](alloy, generatedInputComponentID(signalLogs, i))
 
 		entries, err := buildLokiEntries(input.Entries)
 		if err != nil {
@@ -83,7 +92,8 @@ func buildLokiEntries(entries []LokiEntrySchema) ([]loki.Entry, error) {
 }
 
 func buildLokiEntry(entry LokiEntrySchema) (loki.Entry, error) {
-	var timestamp time.Time
+	// Like a real source, stamp entries with the time they are read.
+	timestamp := time.Now()
 	if entry.Timestamp != "" {
 		parsed, err := time.Parse(time.RFC3339Nano, entry.Timestamp)
 		if err != nil {
@@ -105,14 +115,14 @@ func buildLokiEntry(entry LokiEntrySchema) (loki.Entry, error) {
 func buildLokiAssertions(assertions []LokiAssertionSchema) ([]harness.Assertion, error) {
 	out := make([]harness.Assertion, 0, len(assertions))
 	for _, assertion := range assertions {
-		switch assertion.Type {
-		case "count":
+		switch assertionType(assertion.Type, assertion.Count) {
+		case assertionTypeCount:
 			assert, err := buildLokiCountAssertion(assertion)
 			if err != nil {
 				return nil, err
 			}
 			out = append(out, assert)
-		case "contains":
+		case assertionTypeContains:
 			assert, err := buildLokiContainsAssertion(assertion)
 			if err != nil {
 				return nil, err
@@ -152,7 +162,15 @@ func buildLokiContainsAssertion(assertion LokiAssertionSchema) (harness.Assertio
 }
 
 func buildLokiMatchers(match LokiMatchSchema) ([]harness.EntryMatcher, error) {
-	matchers := make([]harness.EntryMatcher, 0, 4)
+	matchers := make([]harness.EntryMatcher, 0, 5)
+
+	if match.Selector != "" {
+		selector, err := harness.ParseSelector(match.Selector)
+		if err != nil {
+			return nil, err
+		}
+		matchers = append(matchers, harness.LokiEntrySelector(match.Selector, selector))
+	}
 
 	if len(match.Labels.Values) > 0 {
 		partial, err := isPartialMapMatch("labels", match.Labels)

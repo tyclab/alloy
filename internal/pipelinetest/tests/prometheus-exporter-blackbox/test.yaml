@@ -52,218 +52,80 @@ assert:
   prometheus:
     # A healthy target probes successfully, and the probe reports what the mock
     # served: status 200 and the 2-byte body over plain HTTP/1.1.
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_success
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'probe_success{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         value: 1
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_http_status_code
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'probe_http_status_code{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         value: 200
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_http_content_length
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'probe_http_content_length{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         value: 2
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_http_uncompressed_body_length
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'probe_http_uncompressed_body_length{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         value: 2
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_http_version
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'probe_http_version{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         value: 1.1
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_http_ssl
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'probe_http_ssl{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         value: 0
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_http_redirects
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'probe_http_redirects{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         value: 0
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_failed_due_to_regex
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'probe_failed_due_to_regex{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         value: 0
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_ip_protocol
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'probe_ip_protocol{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         value: 4
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: up
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'up{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         value: 1
 
     # A target answering 500 is still scraped, but the probe fails and reports
     # the status code it got.
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_success
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/broken
+    - match:
+        selector: 'probe_success{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/broken"}'
         value: 0
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_http_status_code
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/broken
+    - match:
+        selector: 'probe_http_status_code{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/broken"}'
         value: 500
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: up
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/broken
+    - match:
+        selector: 'up{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/broken"}'
         value: 1
 
     # Targets given as a list attribute probe the same way as target blocks.
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_success
-            instance: prometheus.exporter.blackbox.list
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'probe_success{instance="prometheus.exporter.blackbox.list", job="integrations/blackbox/healthy"}'
         value: 1
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_http_status_code
-            instance: prometheus.exporter.blackbox.list
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'probe_http_status_code{instance="prometheus.exporter.blackbox.list", job="integrations/blackbox/healthy"}'
         value: 200
 
     # Timings and scrape bookkeeping vary between runs, so only check that they
     # arrive as plain samples.
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_dns_lookup_time_seconds
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'probe_dns_lookup_time_seconds{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         histogram: false
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_duration_seconds
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'probe_duration_seconds{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         histogram: false
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_http_duration_seconds
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'probe_http_duration_seconds{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         histogram: false
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: probe_ip_addr_hash
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'probe_ip_addr_hash{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         histogram: false
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: scrape_duration_seconds
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'scrape_duration_seconds{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         histogram: false
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: scrape_samples_post_metric_relabeling
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'scrape_samples_post_metric_relabeling{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         histogram: false
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: scrape_samples_scraped
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'scrape_samples_scraped{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         histogram: false
-    - type: contains
-      match:
-        labels:
-          mode: partial
-          values:
-            __name__: scrape_series_added
-            instance: prometheus.exporter.blackbox.blocks
-            job: integrations/blackbox/healthy
+    - match:
+        selector: 'scrape_series_added{instance="prometheus.exporter.blackbox.blocks", job="integrations/blackbox/healthy"}'
         histogram: false

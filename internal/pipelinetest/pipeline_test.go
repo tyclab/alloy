@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 )
 
 func TestPipelines(t *testing.T) {
@@ -29,12 +28,12 @@ func TestPipelines(t *testing.T) {
 		require.NoError(t, err)
 
 		t.Run(name, func(t *testing.T) {
-			bb, err := os.ReadFile(path)
+			schema, err := LoadTestFile(path)
 			require.NoError(t, err)
-
-			var schema TestSchema
-			require.NoError(t, yaml.Unmarshal(bb, &schema))
-			require.NoError(t, RunTest(t.Context(), schema, TestConfig{DataPath: t.TempDir()}))
+			require.NoError(t, RunTest(t.Context(), schema, TestConfig{
+				DataPath: t.TempDir(),
+				BaseDir:  filepath.Dir(path),
+			}))
 		})
 	}
 }

@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -24,16 +25,43 @@ const (
 )
 
 type Config struct {
-	SinkID         string
-	Source         string
+	SinkID string
+	Source string
+	// SourceName is the file name used in parse and evaluation errors.
+	SourceName     string
 	DataPath       string
 	LokiPipelineV2 bool
+
+	// AssertTimeout bounds how long assertions are retried. Defaults to 30s.
+	AssertTimeout time.Duration
+	// LogWriter receives the runtime's logs. Logs are discarded when nil.
+	LogWriter io.Writer
+}
+
+var registerOnce sync.Once
+
+// Register adds the pipelinetest.* components to the component registry. It
+// is safe to call more than once. NewAlloy calls it, so the components only
+// exist in a process that runs pipeline tests, and the Alloy binary does not
+// offer them to production configs.
+func Register() {
+	registerOnce.Do(func() {
+		registerSink()
+		registerSource()
+		registerMockHTTP()
+	})
 }
 
 // NewAlloy creates and starts an in-process Alloy runtime for pipeline tests
 // from the provided source.
 func NewAlloy(cfg Config) (*Alloy, error) {
-	logger, err := logging.New(io.Discard, logging.DefaultOptions)
+	Register()
+
+	logWriter := cfg.LogWriter
+	if logWriter == nil {
+		logWriter = io.Discard
+	}
+	logger, err := logging.New(logWriter, logging.DefaultOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -54,16 +82,22 @@ func NewAlloy(cfg Config) (*Alloy, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	assertTimeout := cfg.AssertTimeout
+	if assertTimeout <= 0 {
+		assertTimeout = defaultTimeout
+	}
+
 	a := &Alloy{
-		ctrl:   ctrl,
-		cancel: cancel,
+		ctrl:          ctrl,
+		cancel:        cancel,
+		assertTimeout: assertTimeout,
 	}
 
 	a.wg.Go(func() {
 		ctrl.Run(ctx)
 	})
 
-	source, err := alloyruntime.ParseSource("", []byte(cfg.Source))
+	source, err := alloyruntime.ParseSource(cfg.SourceName, []byte(cfg.Source))
 	if err != nil {
 		a.Stop()
 		return nil, err
@@ -90,9 +124,10 @@ func NewAlloy(cfg Config) (*Alloy, error) {
 }
 
 type Alloy struct {
-	ctrl   *alloyruntime.Runtime
-	cancel func()
-	wg     sync.WaitGroup
+	ctrl          *alloyruntime.Runtime
+	cancel        func()
+	wg            sync.WaitGroup
+	assertTimeout time.Duration
 
 	sink *Sink
 }
@@ -124,7 +159,74 @@ func (a *Alloy) Assert(assertions ...Assertion) error {
 			Errors:   errs,
 			Snapshot: s,
 		}
-	}, defaultTimeout, defaultInterval)
+	}, a.assertTimeout, defaultInterval)
+}
+
+// Check is an Assertion with a human-readable name, used for reporting.
+type Check struct {
+	Name      string
+	Assertion Assertion
+}
+
+// CheckResult is the outcome of one Check. Err is nil when the check passed.
+type CheckResult struct {
+	Name string
+	Err  error
+}
+
+// RunChecks evaluates checks against the current snapshot until they all pass
+// or the assertion timeout is reached. Unlike Assert, it reports the outcome
+// of every check, and returns the snapshot of the final attempt.
+func (a *Alloy) RunChecks(checks []Check) ([]CheckResult, Snapshot) {
+	var (
+		results []CheckResult
+		s       snapshot
+	)
+	_ = eventually(func() error {
+		s = a.sink.snapshot()
+		results = make([]CheckResult, len(checks))
+		failed := false
+		for i, check := range checks {
+			results[i] = CheckResult{Name: check.Name, Err: check.Assertion(s)}
+			failed = failed || results[i].Err != nil
+		}
+		if failed {
+			return errors.New("checks failed")
+		}
+		return nil
+	}, a.assertTimeout, defaultInterval)
+
+	return results, exportSnapshot(s)
+}
+
+// UnhealthyComponents lists the components that do not report healthy, with
+// their health message. A component that cannot start, for example because its
+// port is taken, otherwise only shows up as a failed assertion.
+func (a *Alloy) UnhealthyComponents() []ComponentHealth {
+	infos, err := a.ctrl.ListComponents("", component.InfoOptions{GetHealth: true})
+	if err != nil {
+		return nil
+	}
+
+	var out []ComponentHealth
+	for _, info := range infos {
+		if info.Health.Health == component.HealthTypeHealthy {
+			continue
+		}
+		out = append(out, ComponentHealth{
+			ID:      info.ID.String(),
+			Health:  info.Health.Health.String(),
+			Message: info.Health.Message,
+		})
+	}
+	return out
+}
+
+// ComponentHealth is the health of one component.
+type ComponentHealth struct {
+	ID      string `json:"id"`
+	Health  string `json:"health"`
+	Message string `json:"message,omitempty"`
 }
 
 func MustComponent[T any](a *Alloy, id string) T {

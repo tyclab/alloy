@@ -21,6 +21,7 @@ import (
 
 	"github.com/grafana/alloy/internal/component"
 	"github.com/grafana/alloy/internal/component/common/loki"
+	"github.com/grafana/alloy/internal/component/otelcol"
 	alloyprom "github.com/grafana/alloy/internal/component/prometheus"
 	"github.com/grafana/alloy/internal/featuregate"
 	"github.com/grafana/alloy/internal/loki/util"
@@ -32,7 +33,7 @@ const (
 	promRemoteWritePath = "/prom/api/v1/write"
 )
 
-func init() {
+func registerSink() {
 	component.Register(component.Registration{
 		Name:      "pipelinetest.sink",
 		Stability: featuregate.StabilityExperimental,
@@ -52,6 +53,7 @@ type SinkExports struct {
 	LokiReceiver             loki.LogsReceiver    `alloy:"loki_receiver,attr"`
 	PrometheusRemoteWriteURL string               `alloy:"prometheus_remote_write_url,attr"`
 	PrometheusReceiver       storage.AppendableV2 `alloy:"prometheus_receiver,attr"`
+	OtelInput                otelcol.Consumer     `alloy:"otel_input,attr"`
 }
 
 // PrometheusSample is one sample captured by the sink. Histogram is set only for
@@ -76,6 +78,11 @@ type Sink struct {
 	lokiEntries  []loki.Entry
 	promSamples  []PrometheusSample
 	promMetadata map[string]metadata.Metadata
+	spans        []Span
+
+	// OTLP metrics and logs are counted but not captured yet.
+	otlpDataPoints int
+	otlpLogRecords int
 
 	pipelineV2 bool
 }
@@ -180,6 +187,7 @@ func NewSink(opts component.Options, args SinkArguments) (*Sink, error) {
 		LokiReceiver:             s.lokirecv,
 		PrometheusRemoteWriteURL: s.server.URL + promRemoteWritePath,
 		PrometheusReceiver:       s.promrecv,
+		OtelInput:                &otelSink{s: s},
 	})
 
 	return s, nil
@@ -249,6 +257,10 @@ func (s *Sink) storePrometheusMetadata(l labels.Labels, m metadata.Metadata) {
 type snapshot struct {
 	loki       []loki.Entry
 	prometheus []PrometheusSample
+	spans      []Span
+
+	otlpDataPoints int
+	otlpLogRecords int
 }
 
 func (s *Sink) snapshot() snapshot {
@@ -274,9 +286,15 @@ func (s *Sink) snapshot() snapshot {
 		})
 	}
 
+	spans := make([]Span, len(s.spans))
+	copy(spans, s.spans)
+
 	return snapshot{
-		loki:       entries,
-		prometheus: samples,
+		loki:           entries,
+		prometheus:     samples,
+		spans:          spans,
+		otlpDataPoints: s.otlpDataPoints,
+		otlpLogRecords: s.otlpLogRecords,
 	}
 }
 
