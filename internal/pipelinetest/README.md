@@ -42,8 +42,13 @@ swaps its edges for the harness:
 3. **Swap the entries.** For each source, such as `loki.source.file` or
    `prometheus.scrape`, add an input with `replace: <component id>`. The
    input's data goes where the source sent it.
-4. **Remove what needs a real environment**, such as `discovery.kubernetes`,
-   under `config.remove`, along with anything that references it.
+4. **Replace or remove what needs a real environment.** Replace a
+   `discovery.*` component with fake targets to test the relabel rules after
+   it. List anything else under `config.remove`, with whatever references it.
+   If a component reads a file that only exists where it is deployed, point
+   it elsewhere with `config.override`, such as
+   `loki.secretfilter.default: {gitleaks_config: ./gitleaks.toml}`. Override
+   only replaces attributes the config sets.
 5. **Write inputs** that exercise the processing: a record each pipeline
    keeps, one it drops, one it rewrites.
 6. **Assert** what should come out of each.
@@ -161,6 +166,12 @@ inputs:
           status: error                   # unset (default), ok, error
           attributes: {http.route: /checkout}
           resource_attributes: {k8s.namespace.name: shop}
+  targets:
+    - replace: discovery.kubernetes.pods      # its .targets become this list
+      targets:
+        - __address__: 10.0.0.1:8080
+          __meta_kubernetes_namespace: shop
+          __meta_kubernetes_pod_container_port_name: http-metrics
 ```
 
 To test components that receive data on their own listener, send to it
@@ -176,7 +187,8 @@ that pull from an API or probe an endpoint. Reference one from the config as
 
 ### `assert`
 
-Assertions are grouped by signal: `loki`, `prometheus` and `traces`. Each
+Assertions are grouped by signal: `loki`, `prometheus`, `traces` and
+`targets`. Each
 assertion is one of two types:
 
 - `contains` passes when at least one item matches.
@@ -190,8 +202,9 @@ Assertions are retried until they all pass at once, or the timeout expires.
 So `count: 0` can pass before the data it rules out arrives. Pair it with a
 `contains` assertion on data sent alongside it.
 
-**Logs** match on `selector`, `labels`, `line`, `timestamp` and
-`structured_metadata`:
+**Logs** match on `selector`, `labels`, `line`, `line_regex`, `timestamp`
+and `structured_metadata`. `line` is exact; `line_regex` matches anywhere in
+the line:
 
 ```yaml
 - match:
@@ -211,6 +224,15 @@ and `metadata` (`type`, `unit`, `help`):
 **Traces** match on `name`, `service_name`, `kind`, `status`, `scope`,
 `attributes` and `resource_attributes`.
 
+**Targets** check the targets a component exports, named by `from`, and match
+on `selector` and `labels`:
+
+```yaml
+- from: discovery.relabel.pods.output
+  match:
+    labels: {job: shop/api, __address__: 10.0.0.1:8080}
+```
+
 `selector` is a PromQL series selector, with the `=`, `!=`, `=~` and `!~`
 operators. It is the shortest way to match, and the series may carry labels it
 does not name. `labels`, `structured_metadata` and the trace attribute maps
@@ -224,8 +246,8 @@ labels:
 ```
 
 The default mode is `exact` for log and metric labels, and `partial` for span
-and resource attributes, because SDKs and processors add attributes of their
-own.
+attributes and target labels, which carry many labels a test does not care
+about.
 
 ### Not supported yet
 

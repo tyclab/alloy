@@ -261,6 +261,11 @@ type snapshot struct {
 
 	otlpDataPoints int
 	otlpLogRecords int
+
+	// targets holds the exported targets of components, keyed by reference
+	// such as discovery.relabel.pods.output. The Alloy fills it in, not the
+	// sink.
+	targets map[string]targetsSnapshot
 }
 
 func (s *Sink) snapshot() snapshot {

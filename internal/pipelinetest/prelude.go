@@ -25,7 +25,23 @@ func buildSource(schema TestSchema) (string, error) {
 		}
 	}
 
-	transformed, err := transformConfig(configName(schema.Config), schema.Config.Source, replacements, schema.Config.Sinks, schema.Config.Remove)
+	discovery, err := targetLiterals(schema.Inputs.Targets)
+	if err != nil {
+		return "", err
+	}
+
+	overrides, err := overrideExprs(schema.Config.Override)
+	if err != nil {
+		return "", err
+	}
+
+	transformed, err := transformConfig(configName(schema.Config), schema.Config.Source, transformSpec{
+		sources:   replacements,
+		sinks:     schema.Config.Sinks,
+		remove:    schema.Config.Remove,
+		discovery: discovery,
+		overrides: overrides,
+	})
 	if err != nil {
 		return "", err
 	}

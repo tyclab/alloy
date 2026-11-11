@@ -81,3 +81,14 @@ func TestLoadTestFileRejectsUnknownFields(t *testing.T) {
 	_, err := LoadTestFile(path)
 	require.ErrorContains(t, err, "field asert not found")
 }
+
+func TestTargetLiteralsKeepValuesAndLines(t *testing.T) {
+	out, err := targetLiterals([]TargetInputSchema{{
+		Replace: "discovery.kubernetes.pods",
+		Targets: []map[string]string{{"__address__": "a:1", "note": "two  spaces\nand a newline"}},
+	}})
+	require.NoError(t, err)
+	lit := out["discovery.kubernetes.pods"]
+	require.NotContains(t, lit, "\n")
+	require.Contains(t, lit, `"two  spaces\nand a newline"`)
+}

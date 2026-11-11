@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/prometheus/common/model"
@@ -51,8 +52,11 @@ type LokiMatchSchema struct {
 	// Selector is a LogQL-style stream selector, such as
 	// {service_name="api", level=~"warn|error"}. The entry's labels must
 	// satisfy every matcher, and may carry others.
-	Selector           string         `yaml:"selector,omitempty"`
-	Line               string         `yaml:"line,omitempty"`
+	Selector string `yaml:"selector,omitempty"`
+	Line     string `yaml:"line,omitempty"`
+	// LineRegex matches the line anywhere, as a Go regular expression. Use
+	// it for lines with parts that vary, such as hashes.
+	LineRegex          string         `yaml:"line_regex,omitempty"`
 	Timestamp          string         `yaml:"timestamp,omitempty"`
 	Labels             MapMatchSchema `yaml:"labels,omitempty"`
 	StructuredMetadata MapMatchSchema `yaml:"structured_metadata,omitempty"`
@@ -182,6 +186,14 @@ func buildLokiMatchers(match LokiMatchSchema) ([]harness.EntryMatcher, error) {
 
 	if match.Line != "" {
 		matchers = append(matchers, harness.LokiEntryLine(match.Line))
+	}
+
+	if match.LineRegex != "" {
+		re, err := regexp.Compile(match.LineRegex)
+		if err != nil {
+			return nil, fmt.Errorf("parse line_regex %q: %w", match.LineRegex, err)
+		}
+		matchers = append(matchers, harness.LokiEntryLineRegex(re))
 	}
 
 	if match.Timestamp != "" {

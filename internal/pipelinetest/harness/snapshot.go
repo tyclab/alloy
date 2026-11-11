@@ -2,7 +2,9 @@ package harness
 
 import (
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"strings"
 	"time"
 )
@@ -19,6 +21,10 @@ type Snapshot struct {
 	Logs    []LogEntry `json:"logs"`
 	Metrics []Sample   `json:"metrics"`
 	Spans   []SpanInfo `json:"spans"`
+	// Targets maps a component export, such as discovery.relabel.pods.output,
+	// to the targets it held. Only exports a targets assertion reads are
+	// included.
+	Targets map[string][]map[string]string `json:"targets,omitempty"`
 
 	Totals SnapshotTotals `json:"totals"`
 }
@@ -108,10 +114,35 @@ func (s Snapshot) Text(limit int) string {
 		sections = append(sections, fmt.Sprintf("otlp metric data points: %d, otlp log records: %d (not assertable yet)",
 			s.Totals.OTLPDataPoints, s.Totals.OTLPLogRecords))
 	}
+	for _, ref := range slices.Sorted(maps.Keys(s.Targets)) {
+		targets := s.Targets[ref]
+		sections = append(sections, renderCapped("targets of "+ref, len(targets), len(targets), limit, func(i int) string {
+			return renderTarget(targets[i])
+		}))
+	}
 	if len(sections) == 0 {
 		return "nothing reached the sink"
 	}
 	return strings.Join(sections, "\n")
+}
+
+// renderTarget shows a target's labels without the __meta_ labels, which
+// discovery adds in large numbers and relabel rules consume.
+func renderTarget(t map[string]string) string {
+	kept := make(map[string]string, len(t))
+	hidden := 0
+	for k, v := range t {
+		if strings.HasPrefix(k, "__meta_") {
+			hidden++
+			continue
+		}
+		kept[k] = v
+	}
+	out := renderStringMap(kept)
+	if hidden > 0 {
+		out += fmt.Sprintf(" (+%d __meta_ labels)", hidden)
+	}
+	return out
 }
 
 func renderCapped(name string, total, kept, limit int, line func(i int) string) string {
@@ -182,6 +213,16 @@ func exportSnapshot(s snapshot) Snapshot {
 			sample.Unit = p.Metadata.Unit
 		}
 		out.Metrics = append(out.Metrics, sample)
+	}
+
+	for ref, ts := range s.targets {
+		if ts.err != nil {
+			continue
+		}
+		if out.Targets == nil {
+			out.Targets = map[string][]map[string]string{}
+		}
+		out.Targets[ref] = ts.targets[:min(len(ts.targets), snapshotLimit)]
 	}
 
 	for _, sp := range s.spans[:min(len(s.spans), snapshotLimit)] {

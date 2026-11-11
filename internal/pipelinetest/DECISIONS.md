@@ -143,6 +143,21 @@ attributes, so an exact default would make almost every trace assertion
 verbose. The defaults are set per field in `buildSpanMatchers` and the Loki
 and Prometheus builders.
 
+**Overrides** set a component's top-level attribute to a literal, for paths
+and endpoints that only exist where the config is deployed, such as a
+secret filter's `gitleaks_config`. Only attributes the config sets can be
+overridden, which keeps the edit in place and the line numbers intact.
+Nested blocks and expressions as values are not supported yet.
+
+**Discovery** is replaced, not run: a `targets` input rewrites every
+reference to a `discovery.*` component's `targets` export into a literal list.
+The relabel rules after it then run unchanged, and `targets` assertions read
+the result from any component's exports, such as
+`discovery.relabel.pods.output`. Testing a real metrics config showed most of
+its logic lives in `discovery.relabel`, which removing discovery skipped. A
+scrape fed these targets would try to reach the fake addresses, so replace or
+remove it.
+
 **Metric inputs** send samples straight to the destination's appender, in one
 transaction per destination. Each sample takes a series in text exposition
 form, `name{label="value"}`, because that is how users and agents already

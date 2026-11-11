@@ -116,6 +116,7 @@ func Run(ctx context.Context, schema TestSchema, cfg TestConfig) (Result, error)
 		return Result{}, err
 	}
 
+	alloy.ObserveTargets(targetRefs(schema.Assert.Targets)...)
 	results, snapshot := alloy.RunChecks(checks)
 	return Result{
 		Checks:    results,

@@ -128,6 +128,7 @@ type Alloy struct {
 	cancel        func()
 	wg            sync.WaitGroup
 	assertTimeout time.Duration
+	targetRefs    []string
 
 	sink *Sink
 }
@@ -183,7 +184,7 @@ func (a *Alloy) RunChecks(checks []Check) ([]CheckResult, Snapshot) {
 		s       snapshot
 	)
 	_ = eventually(func() error {
-		s = a.sink.snapshot()
+		s = a.snapshot()
 		results = make([]CheckResult, len(checks))
 		failed := false
 		for i, check := range checks {
@@ -197,6 +198,25 @@ func (a *Alloy) RunChecks(checks []Check) ([]CheckResult, Snapshot) {
 	}, a.assertTimeout, defaultInterval)
 
 	return results, exportSnapshot(s)
+}
+
+// ObserveTargets adds component exports, such as
+// discovery.relabel.pods.output, whose targets every snapshot reads so
+// assertions can check them.
+func (a *Alloy) ObserveTargets(refs ...string) {
+	a.targetRefs = append(a.targetRefs, refs...)
+}
+
+func (a *Alloy) snapshot() snapshot {
+	s := a.sink.snapshot()
+	if len(a.targetRefs) > 0 {
+		s.targets = make(map[string]targetsSnapshot, len(a.targetRefs))
+		for _, ref := range a.targetRefs {
+			targets, err := a.targetsOf(ref)
+			s.targets[ref] = targetsSnapshot{targets: targets, err: err}
+		}
+	}
+	return s
 }
 
 // UnhealthyComponents lists the components that do not report healthy, with

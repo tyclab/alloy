@@ -29,11 +29,11 @@ discovery.kubernetes "pods" {
 `
 
 func TestTransformConfig(t *testing.T) {
-	out, err := transformConfig("config.alloy", transformSrc,
-		[]sourceReplacement{{id: "loki.source.file.app", signal: signalLogs}},
-		[]string{"loki.write.cloud"},
-		[]string{"discovery.kubernetes.pods"},
-	)
+	out, err := transformConfig("config.alloy", transformSrc, transformSpec{
+		sources: []sourceReplacement{{id: "loki.source.file.app", signal: signalLogs}},
+		sinks:   []string{"loki.write.cloud"},
+		remove:  []string{"discovery.kubernetes.pods"},
+	})
 	require.NoError(t, err)
 
 	require.Equal(t, "[loki.process.app.receiver, pipelinetest.sink.out.loki_receiver]", out.sources["loki.source.file.app"].forwardTo)
@@ -88,7 +88,7 @@ func TestTransformConfigErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := transformConfig("config.alloy", transformSrc, tt.sources, tt.sinks, tt.remove)
+			_, err := transformConfig("config.alloy", transformSrc, transformSpec{sources: tt.sources, sinks: tt.sinks, remove: tt.remove})
 			require.ErrorContains(t, err, tt.wantErr)
 		})
 	}
@@ -109,10 +109,31 @@ local.file "x" {
   filename = otelcol.exporter.otlp.tempo.something
 }
 `
-	_, err := transformConfig("config.alloy", src, nil, []string{"otelcol.exporter.otlp.tempo"}, nil)
+	_, err := transformConfig("config.alloy", src, transformSpec{sinks: []string{"otelcol.exporter.otlp.tempo"}})
 	require.ErrorContains(t, err, "references otelcol.exporter.otlp.tempo.something")
 }
 
 func lineOf(src, substr string) int {
 	return strings.Count(src[:strings.Index(src, substr)], "\n") + 1
+}
+
+func TestTransformConfigOverride(t *testing.T) {
+	out, err := transformConfig("config.alloy", transformSrc, transformSpec{
+		sinks:     []string{"loki.write.cloud"},
+		overrides: map[string]map[string]string{"discovery.kubernetes.pods": {"role": `"node"`}},
+	})
+	require.NoError(t, err)
+	require.Contains(t, out.source, `role = "node"`)
+	require.Equal(t, strings.Count(transformSrc, "\n"), strings.Count(out.source, "\n"))
+
+	_, err = transformConfig("config.alloy", transformSrc, transformSpec{
+		overrides: map[string]map[string]string{"discovery.kubernetes.pods": {"namespaces": `[]`}},
+	})
+	require.ErrorContains(t, err, "does not set namespaces")
+
+	_, err = transformConfig("config.alloy", transformSrc, transformSpec{
+		sinks:     []string{"loki.write.cloud"},
+		overrides: map[string]map[string]string{"loki.write.cloud": {"x": `1`}},
+	})
+	require.ErrorContains(t, err, "cannot be overridden")
 }

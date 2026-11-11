@@ -80,15 +80,33 @@ type sourceReplacement struct {
 // formatting and comments survive. Removed blocks are replaced with as many
 // newlines as they spanned, so line numbers in load errors still point at the
 // user's file.
-func transformConfig(name, src string, sources []sourceReplacement, sinks, remove []string) (transformedConfig, error) {
+// transformSpec lists what transformConfig changes.
+type transformSpec struct {
+	sources []sourceReplacement
+	sinks   []string
+	remove  []string
+	// discovery maps a discovery component ID to the Alloy list literal that
+	// replaces its targets export.
+	discovery map[string]string
+	// overrides maps a component ID to attribute names and the Alloy
+	// expressions that replace their values.
+	overrides map[string]map[string]string
+}
+
+func (s transformSpec) empty() bool {
+	return len(s.sources) == 0 && len(s.sinks) == 0 && len(s.remove) == 0 && len(s.discovery) == 0 && len(s.overrides) == 0
+}
+
+func transformConfig(name, src string, spec transformSpec) (transformedConfig, error) {
 	out := transformedConfig{
 		source:   src,
 		sources:  map[string]replacedSource{},
 		sinkRefs: map[string]string{},
 	}
-	if len(sources) == 0 && len(sinks) == 0 && len(remove) == 0 {
+	if spec.empty() {
 		return out, nil
 	}
+	sources, sinks, remove, discovery := spec.sources, spec.sinks, spec.remove, spec.discovery
 
 	file, err := parser.ParseFile(name, []byte(src))
 	if err != nil {
@@ -134,6 +152,13 @@ func transformConfig(name, src string, sources []sourceReplacement, sinks, remov
 		out.sinkRefs[id+"."+target.field] = target.replacement
 	}
 
+	for _, id := range slices.Sorted(maps.Keys(discovery)) {
+		if _, err := lookup(id, "a targets input"); err != nil {
+			return out, err
+		}
+		sinkParts[id] = sinkTarget{field: "targets", replacement: discovery[id]}
+	}
+
 	forwardExprs := map[string]ast.Expr{}
 	for _, s := range sources {
 		block, err := lookup(s.id, "a "+string(s.signal)+" input")
@@ -153,6 +178,27 @@ func transformConfig(name, src string, sources []sourceReplacement, sinks, remov
 		}
 	}
 
+	var overridden []span
+	for _, id := range slices.Sorted(maps.Keys(spec.overrides)) {
+		if role, ok := seen[id]; ok {
+			return out, fmt.Errorf("component %s is replaced with %s, so its arguments cannot be overridden", id, role)
+		}
+		block, ok := blocks[id]
+		if !ok {
+			return out, fmt.Errorf("component %s to override is not a top-level block of the config", id)
+		}
+		attrs := spec.overrides[id]
+		for _, name := range slices.Sorted(maps.Keys(attrs)) {
+			attr := findAttribute(block.Body, name)
+			if attr == nil {
+				return out, fmt.Errorf("component %s does not set %s; override only replaces attributes the config sets", id, name)
+			}
+			start, end := ast.StartPos(attr.Value).Offset(), ast.EndPos(attr.Value).Offset()+1
+			overridden = append(overridden, span{start: start, end: end})
+			edits = append(edits, textEdit{start: start, end: end, text: attrs[name]})
+		}
+	}
+
 	refEdits, err := sinkReferenceEdits(file, sinkParts)
 	if err != nil {
 		return out, err
@@ -164,7 +210,7 @@ func transformConfig(name, src string, sources []sourceReplacement, sinks, remov
 	}
 
 	for _, e := range refEdits {
-		if !insideAny(e.start, removed) {
+		if !insideAny(e.start, removed) && !insideAny(e.start, overridden) {
 			edits = append(edits, e)
 		}
 	}
@@ -196,6 +242,15 @@ func forwardToExpr(block *ast.BlockStmt, sig signal) (ast.Expr, error) {
 		}
 	}
 	return nil, fmt.Errorf("%s has no %s attribute to take the %s destination from", blockID(block), attr, sig)
+}
+
+func findAttribute(body ast.Body, name string) *ast.AttributeStmt {
+	for _, stmt := range body {
+		if a, ok := stmt.(*ast.AttributeStmt); ok && a.Name.Name == name {
+			return a
+		}
+	}
+	return nil
 }
 
 func findBlock(body ast.Body, name string) *ast.BlockStmt {
@@ -244,7 +299,7 @@ func (v *refVisitor) Visit(node ast.Node) ast.Visitor {
 		return v
 	}
 	if field != target.field {
-		v.err = fmt.Errorf("the config references %s.%s, but replacing %s with the sink only replaces %s.%s", id, field, id, id, target.field)
+		v.err = fmt.Errorf("the config references %s.%s, but replacing %s only replaces %s.%s", id, field, id, id, target.field)
 		return nil
 	}
 	v.edits = append(v.edits, textEdit{

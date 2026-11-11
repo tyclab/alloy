@@ -61,6 +61,15 @@ type ConfigSchema struct {
 	// Remove lists components to delete from the config, such as discovery
 	// components that need a real environment. Nothing may reference them.
 	Remove []string `yaml:"remove,omitempty"`
+	// Override sets top-level attributes of components to new values, such as
+	// a file path that only exists where the config is deployed:
+	//
+	//	override:
+	//	  loki.secretfilter.default: {gitleaks_config: ./gitleaks.toml}
+	//
+	// Values are literals. Only attributes the config already sets can be
+	// overridden.
+	Override map[string]map[string]any `yaml:"override,omitempty"`
 }
 
 func (c *ConfigSchema) UnmarshalYAML(value *yaml.Node) error {
@@ -107,6 +116,7 @@ type InputSchema struct {
 	Loki       []LokiInputSchema       `yaml:"loki"`
 	Prometheus []PrometheusInputSchema `yaml:"prometheus"`
 	Traces     []TraceInputSchema      `yaml:"traces"`
+	Targets    []TargetInputSchema     `yaml:"targets"`
 	HTTP       []HTTPInputSchema       `yaml:"http"`
 	TCP        []TCPInputSchema        `yaml:"tcp"`
 	UDP        []UDPInputSchema        `yaml:"udp"`
@@ -117,6 +127,7 @@ type AssertionSchema struct {
 	Loki       []LokiAssertionSchema       `yaml:"loki"`
 	Prometheus []PrometheusAssertionSchema `yaml:"prometheus"`
 	Traces     []TraceAssertionSchema      `yaml:"traces"`
+	Targets    []TargetAssertionSchema     `yaml:"targets"`
 }
 
 // MapMatchSchema describes map-like fields such as labels or structured
@@ -236,6 +247,14 @@ func buildChecks(assertions AssertionSchema) ([]harness.Check, error) {
 		checks = append(checks, harness.Check{Name: checkName("traces", i, assertions.Traces[i].Type, assertions.Traces[i].Count, assertions.Traces[i].Name, assertions.Traces[i].describe()), Assertion: a})
 	}
 
+	targetAssertions, err := buildTargetAssertions(assertions.Targets)
+	if err != nil {
+		return nil, err
+	}
+	for i, a := range targetAssertions {
+		checks = append(checks, harness.Check{Name: checkName("targets", i, assertions.Targets[i].Type, assertions.Targets[i].Count, assertions.Targets[i].Name, assertions.Targets[i].describe()), Assertion: a})
+	}
+
 	return checks, nil
 }
 
@@ -324,7 +343,7 @@ func describeString(name, v string) string {
 
 func (a LokiAssertionSchema) describe() string {
 	m := a.Match
-	return describeMatch(a.Count, m.Selector, describeMap("labels", m.Labels), describeString("line", m.Line),
+	return describeMatch(a.Count, m.Selector, describeMap("labels", m.Labels), describeString("line", m.Line), describeString("line_regex", m.LineRegex),
 		describeString("timestamp", m.Timestamp), describeMap("structured_metadata", m.StructuredMetadata))
 }
 
